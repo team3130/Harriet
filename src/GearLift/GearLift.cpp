@@ -10,8 +10,10 @@
 #include "opencv2/cudafilters.hpp"
 
 static const cv::Size frameSize(1280, 720);
-static const cv::Size displaySize(640, 360);
+static const cv::Size displaySize(1280, 720);
+//static const cv::Size displaySize(640, 360);
 static const char* detection_window = "Object Detection";
+static const double MIN_AREA = 0.002 * frameSize.height * frameSize.width;
 
 void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUpper, cv::cuda::GpuMat dst) {
 	cv::cuda::GpuMat channels[3];
@@ -42,8 +44,9 @@ int main()
 #endif
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower(203,  38, 130);
-	static cv::Vec3i BlobUpper(244, 239, 233);
+	static cv::Vec3i BlobLower( 0,  92,  97);
+	static cv::Vec3i BlobUpper(10, 255, 255);
+	static int dispFlag = 2;
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
@@ -95,11 +98,58 @@ int main()
 		dilate->apply(gpu2, gpu1);
 
 		gpu1.download(filtered);
-		cv::resize(filtered, display, displaySize);
+		switch(dispFlag) {
+		case 1:
+			cv::resize(filtered, display, displaySize);
+			break;
+		case 2:
+			cv::resize(frame, display, displaySize);
+			break;
+		}
 
-		cv::imshow(detection_window, display);
+		std::vector<std::vector<cv::Point>> contours;
+		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
+
+		std::vector<cv::Point> one, two;
+		double biggest = 0, second = 0;
+		for (std::vector<cv::Point> cont : contours)
+		{
+			double cont_area = cv::contourArea(cont);
+			if (cont_area > biggest) {
+				two = one;
+				one = cont;
+				second = biggest;
+				biggest = cont_area;
+			}
+			else if (cont_area > second) {
+				second = cont_area;
+				two = cont;
+			}
+		}
+
+		if (biggest > 0 && second > 0) {
+			cv::RotatedRect rect_one = minAreaRect(one);
+			cv::RotatedRect rect_two = minAreaRect(two);
+			if (dispFlag == 2) {
+				cv::Point2f vtx1[4], vtx2[4];
+				rect_one.points(vtx1);
+				rect_two.points(vtx2);
+				for( size_t i = 0; i < 4; i++ ) {
+					cv::line(display, vtx1[i], vtx1[(i+1)%4], cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+					cv::line(display, vtx2[i], vtx2[(i+1)%4], cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+				}
+			}
+		}
+
+		if (dispFlag > 0) {
+			cv::imshow(detection_window, display);
+		}
+
 		int key = cv::waitKey(20);
 		if ((key & 255) == 27) break;
+		if ((key & 255) == 32) {
+			if(++dispFlag > 2) dispFlag =0;
+		}
 	}
 	return 0;
 }
