@@ -10,10 +10,11 @@
 #include "opencv2/cudafilters.hpp"
 
 static const cv::Size frameSize(1280, 720);
-static const cv::Size displaySize(1280, 720);
-//static const cv::Size displaySize(640, 360);
+//static const cv::Size displaySize(1280, 720);
+static const cv::Size displaySize(640, 360);
+static const double displayRatio = double(displaySize.height) / frameSize.height;
 static const char* detection_window = "Object Detection";
-static const double MIN_AREA = 0.002 * frameSize.height * frameSize.width;
+static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 
 void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUpper, cv::cuda::GpuMat dst) {
 	cv::cuda::GpuMat channels[3];
@@ -31,6 +32,34 @@ void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUppe
 	cv::cuda::bitwise_and(channels[0], channels[2], dst);
 }
 
+void FindCorners(
+		const std::vector<cv::Point> cont_one,
+		const cv::Point2f center,
+		const cv::Point2f reference,
+		cv::Point &pointPos,
+		cv::Point &pointNeg )
+{
+	double sqDistPos = 0;
+	double sqDistNeg = 0;
+	cv::Point2f dir((center.x-reference.x)/2, (center.y-reference.y)/2);
+	for (cv::Point pnt : cont_one)
+	{
+		double dx = pnt.x - (reference.x + dir.x);
+		double dy = pnt.y - (reference.y + dir.y);
+		double sD = dx*dx + dy*dy;
+		double cross = cv::Point2f(dx,dy).cross(dir);
+		if (cross >= 0 and sD > sqDistPos) {
+			sqDistPos = sD;
+			pointPos = pnt;
+		}
+		if (cross < 0 and sD > sqDistNeg) {
+			sqDistNeg = sD;
+			pointNeg = pnt;
+		}
+	}
+
+}
+
 int main()
 {
 #if 0
@@ -44,9 +73,9 @@ int main()
 #endif
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower( 0,  92,  97);
-	static cv::Vec3i BlobUpper(10, 255, 255);
-	static int dispFlag = 2;
+	static cv::Vec3i BlobLower( 0, 140,  96);
+	static cv::Vec3i BlobUpper(15, 255, 255);
+	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
@@ -98,7 +127,7 @@ int main()
 		dilate->apply(gpu2, gpu1);
 
 		gpu1.download(filtered);
-		switch(dispFlag) {
+		switch(dispMode) {
 		case 1:
 			cv::resize(filtered, display, displaySize);
 			break;
@@ -110,46 +139,69 @@ int main()
 		std::vector<std::vector<cv::Point>> contours;
 		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
 
-		std::vector<cv::Point> one, two;
+		std::vector<cv::Point> cont_one, cont_two;
+		cv::RotatedRect rect_one, rect_two;
 		double biggest = 0, second = 0;
 		for (std::vector<cv::Point> cont : contours)
 		{
+			cv::RotatedRect rect = cv::minAreaRect(cont);
+			double ratio = rect.size.height / rect.size.width;
+			double angle = fmod((ratio > 1.0 ? rect.angle : rect.angle + 90.0), 90.0);
+			if (fabs(angle) >15.0) continue;
+
 			double cont_area = cv::contourArea(cont);
+			if (cont_area < MIN_AREA) continue;
+
 			if (cont_area > biggest) {
-				two = one;
-				one = cont;
+				cont_two = cont_one;
+				rect_two = rect_one;
 				second = biggest;
+				cont_one = cont;
+				rect_one = rect;
 				biggest = cont_area;
 			}
 			else if (cont_area > second) {
 				second = cont_area;
-				two = cont;
+				cont_two = cont;
+				rect_two = rect;
 			}
 		}
 
 		if (biggest > 0 && second > 0) {
-			cv::RotatedRect rect_one = minAreaRect(one);
-			cv::RotatedRect rect_two = minAreaRect(two);
-			if (dispFlag == 2) {
+			cv::Point corners[4];
+			FindCorners(cont_one, rect_one.center, rect_two.center, corners[0], corners[1]);
+			FindCorners(cont_two, rect_two.center, rect_one.center, corners[2], corners[3]);
+
+			if (dispMode == 2) {
 				cv::Point2f vtx1[4], vtx2[4];
 				rect_one.points(vtx1);
 				rect_two.points(vtx2);
 				for( size_t i = 0; i < 4; i++ ) {
-					cv::line(display, vtx1[i], vtx1[(i+1)%4], cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
-					cv::line(display, vtx2[i], vtx2[(i+1)%4], cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+					cv::line(display, vtx1[i] * displayRatio, vtx1[(i+1)%4] * displayRatio, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+					cv::line(display, vtx2[i] * displayRatio, vtx2[(i+1)%4] * displayRatio, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
 				}
+				double angle = rect_one.size.height/rect_one.size.width > 1.0 ? rect_one.angle : rect_one.angle + 90.0;
+				angle = fmod(angle, 90.0);
+				std::ostringstream oss;
+				oss << "cross";
+				cv::putText(display, oss.str(), cv::Point(30,30) * displayRatio, 1, 2, cv::Scalar(0,255,0));
+				cv::circle(display, corners[0]*displayRatio, 5, cv::Scalar(0,255,0), 2);
+				cv::circle(display, corners[1]*displayRatio, 5, cv::Scalar(0,255,255), 2);
+				cv::circle(display, corners[2]*displayRatio, 5, cv::Scalar(0,0,255), 2);
+				cv::circle(display, corners[3]*displayRatio, 5, cv::Scalar(255,0,0), 2);
 			}
 		}
 
-		if (dispFlag > 0) {
+		if (dispMode > 0) {
 			cv::imshow(detection_window, display);
 		}
 
 		int key = cv::waitKey(20);
 		if ((key & 255) == 27) break;
 		if ((key & 255) == 32) {
-			if(++dispFlag > 2) dispFlag =0;
+			if(++dispMode > 2) dispMode =0;
 		}
+		if ((key & 255) == 's') cv::waitKey(0);
 	}
 	return 0;
 }
