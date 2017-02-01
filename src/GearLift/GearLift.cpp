@@ -15,6 +15,7 @@ static const cv::Size displaySize(640, 360);
 static const double displayRatio = double(displaySize.height) / frameSize.height;
 static const char* detection_window = "Object Detection";
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
+static const double MAX_TILT = 15.0;
 
 void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUpper, cv::cuda::GpuMat dst) {
 	cv::cuda::GpuMat channels[3];
@@ -145,9 +146,13 @@ int main()
 		for (std::vector<cv::Point> cont : contours)
 		{
 			cv::RotatedRect rect = cv::minAreaRect(cont);
-			double ratio = rect.size.height / rect.size.width;
-			double angle = fmod((ratio > 1.0 ? rect.angle : rect.angle + 90.0), 90.0);
-			if (fabs(angle) >15.0) continue;
+
+			if (rect.size.height < rect.size.width) {
+				std::swap(rect.size.height, rect.size.width);
+				rect.angle += 90.0;
+			}
+			rect.angle = fmod(rect.angle, 90.0);
+			if (fabs(rect.angle) > MAX_TILT) continue;
 
 			double cont_area = cv::contourArea(cont);
 			if (cont_area < MIN_AREA) continue;
