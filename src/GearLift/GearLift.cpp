@@ -33,32 +33,36 @@ void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUppe
 	cv::cuda::bitwise_and(channels[0], channels[2], dst);
 }
 
-void FindCorners(
+std::vector<cv::Point> FindCorners2(
 		const std::vector<cv::Point> cont_one,
-		const cv::Point2f center,
-		const cv::Point2f reference,
-		cv::Point &pointPos,
-		cv::Point &pointNeg )
+		cv::RotatedRect box,
+		double dir=1)
 {
-	double sqDistPos = 0;
-	double sqDistNeg = 0;
-	cv::Point2f dir((center.x-reference.x)/2, (center.y-reference.y)/2);
+	std::vector<cv::Point> ret(2, cv::Point(0,0));
+	double maxLo = 0;
+	double maxHi = 0;
+	double r = dir * (box.size.height*box.size.height + box.size.width*box.size.width) / (2 * box.size.width);
+	double alpha = CV_PI * box.angle / 180.0;
+	cv::Matx22f rot(cos(alpha),-sin(alpha),sin(alpha),cos(alpha));
+	cv::Point2f refHi = rot * cv::Point2f(r,  box.size.height/2) + box.center;
+	cv::Point2f refLo = rot * cv::Point2f(r, -box.size.height/2) + box.center;
 	for (cv::Point pnt : cont_one)
 	{
-		double dx = pnt.x - (reference.x + dir.x);
-		double dy = pnt.y - (reference.y + dir.y);
-		double sD = dx*dx + dy*dy;
-		double cross = cv::Point2f(dx,dy).cross(dir);
-		if (cross >= 0 and sD > sqDistPos) {
-			sqDistPos = sD;
-			pointPos = pnt;
+		cv::Point2f lo = cv::Point2f(pnt) - refLo;
+		double sLo = cv::norm(lo);
+		if (sLo > maxLo) {
+			maxLo = sLo;
+			ret[1] = pnt;
 		}
-		if (cross < 0 and sD > sqDistNeg) {
-			sqDistNeg = sD;
-			pointNeg = pnt;
+
+		cv::Point2f hi = cv::Point2f(pnt) - refHi;
+		double sHi = cv::norm(hi);
+		if (sHi > maxHi) {
+			maxHi = sHi;
+			ret[0] = pnt;
 		}
 	}
-
+	return ret;
 }
 
 int main()
@@ -74,7 +78,7 @@ int main()
 #endif
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower( 0, 140,  96);
+	static cv::Vec3i BlobLower( 0, 115,  96);
 	static cv::Vec3i BlobUpper(15, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
@@ -106,7 +110,7 @@ int main()
 	cv::createTrackbar("Lo V",detection_window, &BlobLower[2], 255);
 	cv::createTrackbar("Hi V",detection_window, &BlobUpper[2], 255);
 
-	int elemSize(7);
+	int elemSize(5);
 	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(elemSize+1,elemSize+1));
 	cv::Ptr<cv::cuda::Filter> erode = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu1.type(), element);
 	cv::Ptr<cv::cuda::Filter> dilate = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu1.type(), element);
@@ -173,27 +177,29 @@ int main()
 		}
 
 		if (biggest > 0 && second > 0) {
-			cv::Point corners[4];
-			FindCorners(cont_one, rect_one.center, rect_two.center, corners[0], corners[1]);
-			FindCorners(cont_two, rect_two.center, rect_one.center, corners[2], corners[3]);
+			if (rect_one.center.x > rect_two.center.x) {
+				std::swap(rect_one, rect_two);
+				std::swap(cont_one, cont_two);
+				std::swap(biggest, second);
+			}
+
+			std::vector<cv::Point> lCorn = FindCorners2(cont_one, rect_one, 1);
+			std::vector<cv::Point> rCorn = FindCorners2(cont_two, rect_two, -1);
 
 			if (dispMode == 2) {
 				cv::Point2f vtx1[4], vtx2[4];
 				rect_one.points(vtx1);
 				rect_two.points(vtx2);
 				for( size_t i = 0; i < 4; i++ ) {
-					cv::line(display, vtx1[i] * displayRatio, vtx1[(i+1)%4] * displayRatio, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
-					cv::line(display, vtx2[i] * displayRatio, vtx2[(i+1)%4] * displayRatio, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+					cv::line(display, vtx1[i] * displayRatio, vtx1[(i+1)%4] * displayRatio, cv::Scalar(0, 255, 200), 1, cv::LINE_AA);
+					cv::line(display, vtx2[i] * displayRatio, vtx2[(i+1)%4] * displayRatio, cv::Scalar(0, 255, 200), 1, cv::LINE_AA);
 				}
-				double angle = rect_one.size.height/rect_one.size.width > 1.0 ? rect_one.angle : rect_one.angle + 90.0;
-				angle = fmod(angle, 90.0);
-				std::ostringstream oss;
-				oss << "cross";
-				cv::putText(display, oss.str(), cv::Point(30,30) * displayRatio, 1, 2, cv::Scalar(0,255,0));
-				cv::circle(display, corners[0]*displayRatio, 5, cv::Scalar(0,255,0), 2);
-				cv::circle(display, corners[1]*displayRatio, 5, cv::Scalar(0,255,255), 2);
-				cv::circle(display, corners[2]*displayRatio, 5, cv::Scalar(0,0,255), 2);
-				cv::circle(display, corners[3]*displayRatio, 5, cv::Scalar(255,0,0), 2);
+
+				cv::circle(display, lCorn[0]*displayRatio, 8, cv::Scalar(0,125,255), 2);
+				cv::circle(display, lCorn[1]*displayRatio, 8, cv::Scalar(0,0,255), 2);
+				cv::circle(display, rCorn[0]*displayRatio, 8, cv::Scalar(125,255,0), 2);
+				cv::circle(display, rCorn[1]*displayRatio, 8, cv::Scalar(0,255,0), 2);
+
 			}
 		}
 
