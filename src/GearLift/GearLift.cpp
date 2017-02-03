@@ -2,7 +2,7 @@
 #include <thread>
 #include <chrono>
 #include "networktables/NetworkTable.h"
-#include "opencv2/core.hpp"
+#include "opencv2/opencv.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/cudaarithm.hpp"
@@ -16,6 +16,7 @@ static const double displayRatio = double(displaySize.height) / frameSize.height
 static const char* detection_window = "Object Detection";
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const double MAX_TILT = 15.0;
+static const char* calibration_file = "jetson-camera-720.yml";
 
 void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUpper, cv::cuda::GpuMat dst) {
 	cv::cuda::GpuMat channels[3];
@@ -81,6 +82,30 @@ int main()
 	static cv::Vec3i BlobLower( 0, 115,  96);
 	static cv::Vec3i BlobUpper(15, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
+
+	static std::vector<cv::Point3f> realPoints;
+	realPoints.push_back(cv::Point3f(-5.125, 2.5,0));
+	realPoints.push_back(cv::Point3f(-5.125,-2.5,0));
+	realPoints.push_back(cv::Point3f( 5.125, 2.5,0));
+	realPoints.push_back(cv::Point3f( 5.125,-2.5,0));
+
+	cv::FileStorage fs( calibration_file, cv::FileStorage::READ );
+	cv::Mat         intrinsic, distortion;
+	if( !fs.isOpened() )
+	{
+		std::cerr << "Error: Couldn't open intrinsic parameters file "
+				<< calibration_file << std::endl;
+		return -1;
+	}
+	fs["camera_matrix"] >> intrinsic;
+	fs["distortion_coefficients"] >> distortion;
+	if( intrinsic.empty() || distortion.empty() )
+	{
+		std::cerr << "Error: Couldn't load intrinsic parameters from "
+				<< calibration_file << std::endl;
+		return -1;
+	}
+	fs.release();
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
@@ -185,6 +210,24 @@ int main()
 
 			std::vector<cv::Point> lCorn = FindCorners2(cont_one, rect_one, 1);
 			std::vector<cv::Point> rCorn = FindCorners2(cont_two, rect_two, -1);
+			std::vector<cv::Point2f> imagePoints;
+			imagePoints.push_back(lCorn[0]);
+			imagePoints.push_back(lCorn[1]);
+			imagePoints.push_back(rCorn[0]);
+			imagePoints.push_back(rCorn[1]);
+
+			cv::Mat rvec, tvec, rmat;
+			//cv::Mat rvec(3, 1, cv::DataType<float>::type);
+			//cv::Mat tvec(3, 1, cv::DataType<float>::type);
+
+			cv::solvePnP(
+					realPoints,       // 3-d points in object coordinate
+					imagePoints,        // 2-d points in image coordinates
+					intrinsic,           // Our camera matrix
+					distortion,
+					rvec,                // Output rotation *vector*.
+					tvec                 // Output translation vector.
+			);
 
 			if (dispMode == 2) {
 				cv::Point2f vtx1[4], vtx2[4];
@@ -200,6 +243,18 @@ int main()
 				cv::circle(display, rCorn[0]*displayRatio, 8, cv::Scalar(125,255,0), 2);
 				cv::circle(display, rCorn[1]*displayRatio, 8, cv::Scalar(0,255,0), 2);
 
+				std::ostringstream oss;
+				oss << tvec.at<double>(0);
+				cv::putText(display, oss.str(), cv::Point(20,20),2,1,cv::Scalar(0,200,200),1);
+				oss.seekp(0);
+				oss << tvec.at<double>(1) << "     ";
+				cv::putText(display, oss.str(), cv::Point(20,50),2,1,cv::Scalar(0,200,200),1);
+				oss.seekp(0);
+				oss << tvec.at<double>(2) << "     ";
+				cv::putText(display, oss.str(), cv::Point(20,80),2,1,cv::Scalar(0,200,200),1);
+				oss.seekp(0);
+				oss << cv::norm(tvec) << "      ";
+				cv::putText(display, oss.str(), cv::Point(20,110),2,1,cv::Scalar(0,200,200),1);
 			}
 		}
 
