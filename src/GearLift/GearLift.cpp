@@ -79,15 +79,15 @@ int main()
 #endif
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower( 0, 115,  96);
-	static cv::Vec3i BlobUpper(15, 255, 255);
+	static cv::Vec3i BlobLower(33,  56,  78);
+	static cv::Vec3i BlobUpper(48, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
 	static std::vector<cv::Point3f> realPoints;
-	realPoints.push_back(cv::Point3f(-5.125, 2.5,0));
-	realPoints.push_back(cv::Point3f(-5.125,-2.5,0));
-	realPoints.push_back(cv::Point3f( 5.125, 2.5,0));
-	realPoints.push_back(cv::Point3f( 5.125,-2.5,0));
+	realPoints.push_back(cv::Point3f(-5.125,-2.5, 10.5)); // Top left
+	realPoints.push_back(cv::Point3f(-5.125, 2.5, 10.5)); // Bottom Left
+	realPoints.push_back(cv::Point3f( 5.125,-2.5, 10.5)); // Top right
+	realPoints.push_back(cv::Point3f( 5.125, 2.5, 10.5)); // Bottom right
 
 	cv::FileStorage fs( calibration_file, cv::FileStorage::READ );
 	cv::Mat         intrinsic, distortion;
@@ -216,9 +216,8 @@ int main()
 			imagePoints.push_back(rCorn[0]);
 			imagePoints.push_back(rCorn[1]);
 
-			cv::Mat rvec, tvec, rmat;
-			//cv::Mat rvec(3, 1, cv::DataType<float>::type);
-			//cv::Mat tvec(3, 1, cv::DataType<float>::type);
+			cv::Mat rvec, tvec;
+			cv::Matx33d rmat;
 
 			cv::solvePnP(
 					realPoints,       // 3-d points in object coordinate
@@ -228,33 +227,36 @@ int main()
 					rvec,                // Output rotation *vector*.
 					tvec                 // Output translation vector.
 			);
+			cv::Rodrigues(rvec, rmat);
+			cv::Point3d peg = rmat * cv::Point3d(0,0,displaySize.height/10);
+			cv::Point dispTarget = cv::Point(
+					0.5*displaySize.width  + (displaySize.height/150)*tvec.at<double>(0),
+					0.9*displaySize.height - (displaySize.height/150)*tvec.at<double>(2)
+					);
+			cv::Point peg2D = cv::Point(peg.x,-peg.z);
 
 			if (dispMode == 2) {
-				cv::Point2f vtx1[4], vtx2[4];
-				rect_one.points(vtx1);
-				rect_two.points(vtx2);
-				for( size_t i = 0; i < 4; i++ ) {
-					cv::line(display, vtx1[i] * displayRatio, vtx1[(i+1)%4] * displayRatio, cv::Scalar(0, 255, 200), 1, cv::LINE_AA);
-					cv::line(display, vtx2[i] * displayRatio, vtx2[(i+1)%4] * displayRatio, cv::Scalar(0, 255, 200), 1, cv::LINE_AA);
-				}
+				cv::line(display, imagePoints[0] * displayRatio, imagePoints[1] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
+				cv::line(display, imagePoints[1] * displayRatio, imagePoints[3] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
+				cv::line(display, imagePoints[3] * displayRatio, imagePoints[2] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
+				cv::line(display, imagePoints[2] * displayRatio, imagePoints[0] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
 
-				cv::circle(display, lCorn[0]*displayRatio, 8, cv::Scalar(0,125,255), 2);
-				cv::circle(display, lCorn[1]*displayRatio, 8, cv::Scalar(0,0,255), 2);
-				cv::circle(display, rCorn[0]*displayRatio, 8, cv::Scalar(125,255,0), 2);
-				cv::circle(display, rCorn[1]*displayRatio, 8, cv::Scalar(0,255,0), 2);
+				cv::circle(display, lCorn[0]*displayRatio, 8, cv::Scalar(0,125,255), 1);
+				cv::circle(display, lCorn[1]*displayRatio, 8, cv::Scalar(0,0,255), 1);
+				cv::circle(display, rCorn[0]*displayRatio, 8, cv::Scalar(125,255,0), 1);
+				cv::circle(display, rCorn[1]*displayRatio, 8, cv::Scalar(0,255,0), 1);
 
+				cv::line(display,
+						dispTarget,
+						cv::Point(displaySize.width/2,displaySize.height*0.9),
+						cv::Scalar(0,255,255));
+				cv::line(display,
+						dispTarget,
+						dispTarget+peg2D,
+						cv::Scalar(0,0,255));
 				std::ostringstream oss;
-				oss << tvec.at<double>(0);
-				cv::putText(display, oss.str(), cv::Point(20,20),2,1,cv::Scalar(0,200,200),1);
-				oss.seekp(0);
-				oss << tvec.at<double>(1) << "     ";
-				cv::putText(display, oss.str(), cv::Point(20,50),2,1,cv::Scalar(0,200,200),1);
-				oss.seekp(0);
-				oss << tvec.at<double>(2) << "     ";
-				cv::putText(display, oss.str(), cv::Point(20,80),2,1,cv::Scalar(0,200,200),1);
-				oss.seekp(0);
 				oss << cv::norm(tvec) << "      ";
-				cv::putText(display, oss.str(), cv::Point(20,110),2,1,cv::Scalar(0,200,200),1);
+				cv::putText(display, oss.str(), dispTarget, cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,0.5,cv::Scalar(0,200,200),1);
 			}
 		}
 
