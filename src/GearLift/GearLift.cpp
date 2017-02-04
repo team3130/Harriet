@@ -79,7 +79,7 @@ int main()
 #endif
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower(33,  56,  78);
+	static cv::Vec3i BlobLower(24, 128,  55);
 	static cv::Vec3i BlobUpper(48, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
@@ -137,8 +137,8 @@ int main()
 
 	int elemSize(5);
 	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(elemSize+1,elemSize+1));
-	cv::Ptr<cv::cuda::Filter> erode = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, gpu1.type(), element);
-	cv::Ptr<cv::cuda::Filter> dilate = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN, gpu1.type(), element);
+	cv::Ptr<cv::cuda::Filter> erode = cv::cuda::createMorphologyFilter(cv::MORPH_ERODE, gpu1.type(), element);
+	cv::Ptr<cv::cuda::Filter> dilate = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, gpu1.type(), element);
 
 	gpu1.create(frameSize, CV_8UC1);
 	gpu2.create(frameSize, CV_8UC1);
@@ -175,27 +175,33 @@ int main()
 		for (std::vector<cv::Point> cont : contours)
 		{
 			cv::RotatedRect rect = cv::minAreaRect(cont);
+			double area = rect.size.height * rect.size.width;
+			if (area < MIN_AREA) continue;
 
 			if (rect.size.height < rect.size.width) {
 				std::swap(rect.size.height, rect.size.width);
 				rect.angle += 90.0;
 			}
-			rect.angle = fmod(rect.angle, 90.0);
+			rect.angle = fmod(rect.angle, 180.0);
+			if (rect.angle >  90.0) rect.angle -= 180;
+			if (rect.angle < -90.0) rect.angle += 180;
+			std::ostringstream ss;
+			ss << rect.angle;
+			cv::putText(display, ss.str(), displayRatio*rect.center, 0,1,cv::Scalar(0,255,255));
+
 			if (fabs(rect.angle) > MAX_TILT) continue;
 
-			double cont_area = cv::contourArea(cont);
-			if (cont_area < MIN_AREA) continue;
 
-			if (cont_area > biggest) {
+			if (area > biggest) {
 				cont_two = cont_one;
 				rect_two = rect_one;
 				second = biggest;
 				cont_one = cont;
 				rect_one = rect;
-				biggest = cont_area;
+				biggest = area;
 			}
-			else if (cont_area > second) {
-				second = cont_area;
+			else if (area > second) {
+				second = area;
 				cont_two = cont;
 				rect_two = rect;
 			}
