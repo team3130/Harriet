@@ -15,7 +15,6 @@ static const cv::Size displaySize(640, 360);
 static const double displayRatio = double(displaySize.height) / frameSize.height;
 static const char* detection_window = "Object Detection";
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
-static const double MAX_TILT = 15.0;
 static const char* calibration_file = "jetson-camera-720.yml";
 
 void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUpper, cv::cuda::GpuMat dst) {
@@ -65,6 +64,53 @@ std::vector<cv::Point> FindCorners2(
 	}
 	return ret;
 }
+
+void righten(cv::RotatedRect &other)
+{
+	if (other.size.height < other.size.width) {
+		std::swap(other.size.height, other.size.width);
+		other.angle += 90.0;
+	}
+	other.angle = fmod(other.angle, 180.0);
+	if (other.angle >  90.0) other.angle -= 180;
+	if (other.angle < -90.0) other.angle += 180;
+}
+
+float rate2rects(cv::RotatedRect one, cv::RotatedRect two)
+{
+	static const float perf_height = 5.0 / 8.25;
+	static const float perf_width  = 2.0 / 8.25;
+	float acc = fabs(sin(CV_PI*one.angle/180.0)) + fabs(sin(CV_PI*two.angle/180.0));
+	cv::Point2f bar = two.center - one.center;
+	if(bar.x == 0) return 999999;
+	acc += fabs(bar.y/bar.x);
+	float bar_len = cv::norm(bar);
+	acc += fabs(one.size.height / bar_len - perf_height);
+	acc += fabs(one.size.width  / bar_len - perf_width);
+	acc += fabs(two.size.height / bar_len - perf_height);
+	acc += fabs(two.size.width  / bar_len - perf_width);
+	acc += fabs((one.size.height - two.size.height) / bar_len);
+	return acc;
+}
+
+float rate3rects(cv::RotatedRect one, cv::RotatedRect two, cv::RotatedRect three)
+{
+	float acc = 0;
+//	cv::Point2f pole = three.center - two.center;
+//	if (pole.y == 0) return 99999;
+//	acc += fabs(pole.x / pole.y);
+	cv::Point2f pts[8];
+	two.points(pts);
+	three.points(pts+4);
+	std::vector<cv::Point2f> new_points;
+	new_points.reserve(8);
+	for(size_t i=0; i<8; ++i) new_points.push_back(pts[i]);
+	cv::RotatedRect other = cv::minAreaRect(new_points);
+	righten(other);
+	acc += rate2rects(one, other);
+	return acc;
+}
+
 
 int main()
 {
@@ -169,53 +215,86 @@ int main()
 		std::vector<std::vector<cv::Point>> contours;
 		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
 
-		std::vector<cv::Point> cont_one, cont_two;
-		cv::RotatedRect rect_one, rect_two;
-		double biggest = 0, second = 0;
+		std::vector<cv::Point> cont_one[3];
+		cv::RotatedRect rect_one[3];
+		float biggest[3] = {0,0,0};
 		for (std::vector<cv::Point> cont : contours)
 		{
 			cv::RotatedRect rect = cv::minAreaRect(cont);
-			double area = rect.size.height * rect.size.width;
+			float area = rect.size.height * rect.size.width;
 			if (area < MIN_AREA) continue;
+			righten(rect);
 
-			if (rect.size.height < rect.size.width) {
-				std::swap(rect.size.height, rect.size.width);
-				rect.angle += 90.0;
+			if (area > biggest[0]) {
+				cont_one[2] = cont_one[1];
+				cont_one[1] = cont_one[0];
+				cont_one[0] = cont;
+				rect_one[2] = rect_one[1];
+				rect_one[1] = rect_one[0];
+				rect_one[0] = rect;
+				biggest[2] = biggest[1];
+				biggest[1] = biggest[0];
+				biggest[0] = area;
 			}
-			rect.angle = fmod(rect.angle, 180.0);
-			if (rect.angle >  90.0) rect.angle -= 180;
-			if (rect.angle < -90.0) rect.angle += 180;
-			std::ostringstream ss;
-			ss << rect.angle;
-			cv::putText(display, ss.str(), displayRatio*rect.center, 0,1,cv::Scalar(0,255,255));
-
-			if (fabs(rect.angle) > MAX_TILT) continue;
-
-
-			if (area > biggest) {
-				cont_two = cont_one;
-				rect_two = rect_one;
-				second = biggest;
-				cont_one = cont;
-				rect_one = rect;
-				biggest = area;
+			else if (area > biggest[1]) {
+				cont_one[2] = cont_one[1];
+				cont_one[1] = cont;
+				rect_one[2] = rect_one[1];
+				rect_one[1] = rect;
+				biggest[2] = biggest[1];
+				biggest[1] = area;
 			}
-			else if (area > second) {
-				second = area;
-				cont_two = cont;
-				rect_two = rect;
+			else if (area > biggest[2]) {
+				cont_one[2] = cont;
+				rect_one[2] = rect;
+				biggest[2] = area;
 			}
 		}
 
-		if (biggest > 0 && second > 0) {
-			if (rect_one.center.x > rect_two.center.x) {
-				std::swap(rect_one, rect_two);
-				std::swap(cont_one, cont_two);
-				std::swap(biggest, second);
+		if (biggest[0] > 0 && biggest[1] > 0) {
+			cv::RotatedRect lRect, rRect;
+			std::vector<cv::Point> lCont, rCont;
+			float mscore = 999999;
+
+			if(biggest[2] > 0) {
+				for(size_t i=0; i < 3; ++i) {
+					float score = rate2rects(rect_one[i], rect_one[(i+1)%3]);
+					if(score < mscore) {
+						mscore = score;
+						lRect = rect_one[i];
+						lCont = cont_one[i];
+						rRect = rect_one[(i+1)%3];
+						rCont = cont_one[(i+1)%3];
+					}
+				}
+				for(size_t i=0; i < 3; ++i) {
+					float score = rate3rects(rect_one[i], rect_one[(i+1)%3], rect_one[(i+2)%3]);
+					if(score < mscore) {
+						mscore = score;
+						lRect = rect_one[i];
+						lCont = cont_one[i];
+						rCont = cont_one[(i+1)%3];
+						rCont.reserve(rCont.size() + cont_one[(i+2)%3].size());
+						rCont.insert(rCont.end(), cont_one[(i+2)%3].begin(), cont_one[(i+2)%3].end());
+						rRect = cv::minAreaRect(rCont);
+						righten(rRect);
+					}
+				}
+			}
+			else {
+				lRect = rect_one[0];
+				lCont = cont_one[0];
+				rRect = rect_one[1];
+				rCont = cont_one[1];
 			}
 
-			std::vector<cv::Point> lCorn = FindCorners2(cont_one, rect_one, 1);
-			std::vector<cv::Point> rCorn = FindCorners2(cont_two, rect_two, -1);
+			if (lRect.center.x > rRect.center.x) {
+				std::swap(lRect, rRect);
+				std::swap(lCont, rCont);
+			}
+
+			std::vector<cv::Point> lCorn = FindCorners2(lCont, lRect,  1);
+			std::vector<cv::Point> rCorn = FindCorners2(rCont, rRect, -1);
 			std::vector<cv::Point2f> imagePoints;
 			imagePoints.push_back(lCorn[0]);
 			imagePoints.push_back(lCorn[1]);
@@ -262,7 +341,7 @@ int main()
 						cv::Scalar(0,0,255));
 				std::ostringstream oss;
 				oss << cv::norm(tvec) << "      ";
-				cv::putText(display, oss.str(), dispTarget, cv::HersheyFonts::FONT_HERSHEY_SIMPLEX,0.5,cv::Scalar(0,200,200),1);
+				cv::putText(display, oss.str(), dispTarget, 0, 0.33, cv::Scalar(0,200,200));
 			}
 		}
 
