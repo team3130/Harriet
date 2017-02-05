@@ -1,6 +1,5 @@
 #include <iostream>
-#include <thread>
-#include <chrono>
+#include <memory>
 #include "networktables/NetworkTable.h"
 #include "opencv2/opencv.hpp"
 #include "opencv2/highgui.hpp"
@@ -114,15 +113,10 @@ float rate3rects(cv::RotatedRect one, cv::RotatedRect two, cv::RotatedRect three
 
 int main()
 {
-#if 0
 	NetworkTable::SetClientMode();
 	NetworkTable::SetTeam(3130);
 	std::shared_ptr<NetworkTable> table = NetworkTable::GetTable("/Jetson");
-	std::this_thread::sleep_for(std::chrono::seconds(2));
-	std::cout << table->GetString("Command", "Nothing") << std::endl;
-	std::this_thread::sleep_for(std::chrono::seconds(2));
-	std::cout << table->GetString("Command", "Nothing") << std::endl;
-#endif
+
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
 	static cv::Vec3i BlobLower(24, 128,  55);
@@ -301,7 +295,7 @@ int main()
 			imagePoints.push_back(rCorn[0]);
 			imagePoints.push_back(rCorn[1]);
 
-			cv::Mat rvec, tvec;
+			cv::Vec3d rvec, tvec, lvec;
 			cv::Matx33d rmat;
 
 			cv::solvePnP(
@@ -313,12 +307,17 @@ int main()
 					tvec                 // Output translation vector.
 			);
 			cv::Rodrigues(rvec, rmat);
+			lvec = -(rmat.t() * tvec);
 			cv::Point3d peg = rmat * cv::Point3d(0,0,displaySize.height/10);
 			cv::Point dispTarget = cv::Point(
-					0.5*displaySize.width  + (displaySize.height/150)*tvec.at<double>(0),
-					0.9*displaySize.height - (displaySize.height/150)*tvec.at<double>(2)
+					0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
+					0.9*displaySize.height - (displaySize.height/150)*tvec[2]
 					);
 			cv::Point peg2D = cv::Point(peg.x,-peg.z);
+
+			table->PutNumber("PegDistance",cv::norm(tvec));
+			table->PutNumber("PegOffset", lvec[0]);
+			table->PutNumber("PegYaw", 180.0*atan2(tvec[0],tvec[2])/CV_PI);
 
 			if (dispMode == 2) {
 				cv::line(display, imagePoints[0] * displayRatio, imagePoints[1] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
@@ -340,7 +339,7 @@ int main()
 						dispTarget+peg2D,
 						cv::Scalar(0,0,255));
 				std::ostringstream oss;
-				oss << cv::norm(tvec) << "      ";
+				oss << cv::norm(tvec) << " : " << lvec[0] << " : " << 180.0*atan2(tvec[0],tvec[2])/CV_PI;
 				cv::putText(display, oss.str(), dispTarget, 0, 0.33, cv::Scalar(0,200,200));
 			}
 		}
