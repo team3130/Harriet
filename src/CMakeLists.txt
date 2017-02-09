@@ -15,3 +15,7 @@ target_link_libraries(loadingstation ${OpenCV_LIBS} ntcore ${CMAKE_THREAD_LIBS_I
 
 add_executable(gearlift GearLift/GearLift.cpp)
 target_link_libraries(gearlift ${OpenCV_LIBS} ntcore ${CMAKE_THREAD_LIBS_INIT})
+
+add_executable(calibration calibration/calibration.cpp)
+target_link_libraries(calibration ${OpenCV_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+

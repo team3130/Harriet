@@ -14,7 +14,7 @@ static const cv::Size displaySize(640, 360);
 static const double displayRatio = double(displaySize.height) / frameSize.height;
 static const char* detection_window = "Object Detection";
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
-static const char* calibration_file = "jetson-camera-720.yml";
+static const char* default_intrinsic_file = "jetson-camera-720.yml";
 
 void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUpper, cv::cuda::GpuMat dst) {
 	cv::cuda::GpuMat channels[3];
@@ -110,9 +110,35 @@ float rate3rects(cv::RotatedRect one, cv::RotatedRect two, cv::RotatedRect three
 	return acc;
 }
 
-
-int main()
+bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortion)
 {
+	cv::FileStorage fs( filename, cv::FileStorage::READ );
+	if( !fs.isOpened() )
+	{
+		std::cerr << "Error: Couldn't open intrinsic parameters file "
+				<< filename << std::endl;
+		return false;
+	}
+	fs["camera_matrix"] >> intrinsic;
+	fs["distortion_coefficients"] >> distortion;
+	if( intrinsic.empty() || distortion.empty() )
+	{
+		std::cerr << "Error: Couldn't load intrinsic parameters from "
+				<< filename << std::endl;
+		return false;
+	}
+	fs.release();
+	return true;
+}
+
+int main(int argc, const char** argv)
+{
+	const char* intrinsic_file = default_intrinsic_file;
+	if(argc > 1) intrinsic_file = argv[1];
+
+	cv::Mat intrinsic, distortion;
+	if(!readIntrinsics(intrinsic_file, intrinsic, distortion)) return -1;
+
 	NetworkTable::SetClientMode();
 	NetworkTable::SetTeam(3130);
 	std::shared_ptr<NetworkTable> table = NetworkTable::GetTable("/Jetson");
@@ -128,24 +154,6 @@ int main()
 	realPoints.push_back(cv::Point3f(-5.125, 2.5, 10.5)); // Bottom Left
 	realPoints.push_back(cv::Point3f( 5.125,-2.5, 10.5)); // Top right
 	realPoints.push_back(cv::Point3f( 5.125, 2.5, 10.5)); // Bottom right
-
-	cv::FileStorage fs( calibration_file, cv::FileStorage::READ );
-	cv::Mat         intrinsic, distortion;
-	if( !fs.isOpened() )
-	{
-		std::cerr << "Error: Couldn't open intrinsic parameters file "
-				<< calibration_file << std::endl;
-		return -1;
-	}
-	fs["camera_matrix"] >> intrinsic;
-	fs["distortion_coefficients"] >> distortion;
-	if( intrinsic.empty() || distortion.empty() )
-	{
-		std::cerr << "Error: Couldn't load intrinsic parameters from "
-				<< calibration_file << std::endl;
-		return -1;
-	}
-	fs.release();
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
@@ -339,7 +347,7 @@ int main()
 						dispTarget+peg2D,
 						cv::Scalar(0,0,255));
 				std::ostringstream oss;
-				oss << cv::norm(tvec) << " : " << lvec[0] << " : " << 180.0*atan2(tvec[0],tvec[2])/CV_PI;
+				oss << lvec[2] << " : " << lvec[0] << " : " << 180.0*atan2(tvec[0],tvec[2])/CV_PI;
 				cv::putText(display, oss.str(), dispTarget, 0, 0.33, cv::Scalar(0,200,200));
 			}
 		}
