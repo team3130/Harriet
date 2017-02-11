@@ -317,7 +317,9 @@ int main(int argc, const char** argv)
 					tvec                 // Output translation vector.
 			);
 			cv::Rodrigues(rvec, rmat);
-			lvec = -(rmat.t() * (tvec + camera_offset));
+			// tvec is where the target is in the camera coordinates
+			// We offset it with the camera_offset vector and rotate opposite to the target's rotation
+			lvec = rmat.t() * (tvec + camera_offset);
 			cv::Vec3d peg = rmat.t() * (tvec + camera_offset);
 			cv::Point dispTarget = cv::Point(
 					0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
@@ -349,11 +351,14 @@ int main(int argc, const char** argv)
 						dispTarget - peg2D,
 						cv::Scalar(0,0,255));
 				std::ostringstream oss;
-				oss << rvec[2] << " : " << rvec[0] << " : " << rvec[1] << " | " << 180.0*atan2(tvec[0],tvec[2])/CV_PI;
+				oss << "Yaw: " << 180.0*atan2(tvec[0],tvec[2])/CV_PI << " (" << rvec[0] << " : " << rvec[1] << " : " << rvec[2] << ")";
 				cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
 				std::ostringstream oss1;
-				oss1 << lvec[2] << " : " << lvec[0] << " : " << lvec[1];
+				oss1 << "Downrange" << lvec[2];
 				cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
+				std::ostringstream oss2;
+				oss2 << "Crossrange" << lvec[0];
+				cv::putText(display, oss2.str(), cv::Point(20,60), 0, 0.33, cv::Scalar(0,200,200));
 			}
 		}
 
