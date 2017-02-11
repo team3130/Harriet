@@ -149,6 +149,8 @@ int main(int argc, const char** argv)
 	static cv::Vec3i BlobUpper(48, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
+	cv::Vec3d camera_offset(-7.0, -4.0, -12);
+
 	static std::vector<cv::Point3f> realPoints;
 	realPoints.push_back(cv::Point3f(-5.125,-2.5, 10.5)); // Top left
 	realPoints.push_back(cv::Point3f(-5.125, 2.5, 10.5)); // Bottom Left
@@ -315,13 +317,13 @@ int main(int argc, const char** argv)
 					tvec                 // Output translation vector.
 			);
 			cv::Rodrigues(rvec, rmat);
-			lvec = -(rmat.t() * tvec);
-			cv::Point3d peg = rmat * cv::Point3d(0,0,displaySize.height/10);
+			lvec = -(rmat.t() * (tvec + camera_offset));
+			cv::Vec3d peg = rmat.t() * (tvec + camera_offset);
 			cv::Point dispTarget = cv::Point(
 					0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
 					0.9*displaySize.height - (displaySize.height/150)*tvec[2]
 					);
-			cv::Point peg2D = cv::Point(peg.x,-peg.z);
+			cv::Point peg2D = displaySize.height/10 * (cv::Point2d(peg[0],peg[2]) / cv::norm(peg));
 
 			table->PutNumber("PegDistance",cv::norm(tvec));
 			table->PutNumber("PegOffset", lvec[0]);
@@ -344,11 +346,14 @@ int main(int argc, const char** argv)
 						cv::Scalar(0,255,255));
 				cv::line(display,
 						dispTarget,
-						dispTarget+peg2D,
+						dispTarget - peg2D,
 						cv::Scalar(0,0,255));
 				std::ostringstream oss;
-				oss << lvec[2] << " : " << lvec[0] << " : " << 180.0*atan2(tvec[0],tvec[2])/CV_PI;
-				cv::putText(display, oss.str(), dispTarget, 0, 0.33, cv::Scalar(0,200,200));
+				oss << rvec[2] << " : " << rvec[0] << " : " << rvec[1] << " | " << 180.0*atan2(tvec[0],tvec[2])/CV_PI;
+				cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
+				std::ostringstream oss1;
+				oss1 << lvec[2] << " : " << lvec[0] << " : " << lvec[1];
+				cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
 			}
 		}
 
