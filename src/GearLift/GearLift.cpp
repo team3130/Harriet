@@ -9,7 +9,6 @@
 #include "opencv2/cudafilters.hpp"
 
 static const cv::Size frameSize(1280, 720);
-//static const cv::Size displaySize(1280, 720);
 static const cv::Size displaySize(640, 360);
 static const double displayRatio = double(displaySize.height) / frameSize.height;
 static const char* detection_window = "Object Detection";
@@ -147,7 +146,7 @@ int main(int argc, const char** argv)
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
 	static cv::Vec3i BlobLower(24, 128,  55);
 	static cv::Vec3i BlobUpper(48, 255, 255);
-	static int dispMode = 2; // 0: none, 1: bw, 2: color
+	static int dispMode = 0; // 0: none, 1: bw, 2: color
 
 	cv::Vec3d camera_offset(-7.0, -4.0, -12);
 
@@ -351,13 +350,13 @@ int main(int argc, const char** argv)
 						dispTarget - peg2D,
 						cv::Scalar(0,0,255));
 				std::ostringstream oss;
-				oss << "Yaw: " << 180.0*atan2(tvec[0],tvec[2])/CV_PI << " (" << rvec[0] << " : " << rvec[1] << " : " << rvec[2] << ")";
+				oss << "Yaw:  " << 180.0*atan2(tvec[0],tvec[2])/CV_PI << " (" << rvec[0] << " : " << rvec[1] << " : " << rvec[2] << ")";
 				cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
 				std::ostringstream oss1;
-				oss1 << "Downrange" << lvec[2];
+				oss1 << "Downrange: " << lvec[2];
 				cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
 				std::ostringstream oss2;
-				oss2 << "Crossrange" << lvec[0];
+				oss2 << "Crossrange: " << lvec[0];
 				cv::putText(display, oss2.str(), cv::Point(20,60), 0, 0.33, cv::Scalar(0,200,200));
 			}
 		}
