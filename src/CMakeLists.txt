@@ -19,3 +19,5 @@ target_link_libraries(gearlift ${OpenCV_LIBS} ntcore ${CMAKE_THREAD_LIBS_INIT})
 add_executable(calibration calibration/calibration.cpp)
 target_link_libraries(calibration ${OpenCV_LIBS} ${CMAKE_THREAD_LIBS_INIT})
 
+add_executable(highgoal HighGoal/HighGoal.cpp)
+target_link_libraries(highgoal ${OpenCV_LIBS} ntcore ${CMAKE_THREAD_LIBS_INIT})
