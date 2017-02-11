@@ -325,10 +325,9 @@ int main(int argc, const char** argv)
 					);
 			cv::Point peg2D = displaySize.height/10 * (cv::Point2d(peg[0],peg[2]) / cv::norm(peg));
 
-			table->PutNumber("PegDistance",cv::norm(tvec));
-			table->PutNumber("PegCrossrange", lvec[0]);
-			table->PutNumber("PegDownrange", lvec[2]);
-			table->PutNumber("PegYaw", 180.0*atan2(tvec[0],tvec[2])/CV_PI);
+			table->PutNumber("Peg Crossrange", lvec[0]);
+			table->PutNumber("Peg Downrange", lvec[2]);
+			table->PutNumber("Peg Yaw", 180.0*atan2(tvec[0],tvec[2])/CV_PI);
 
 			if (dispMode == 2) {
 				cv::line(display, imagePoints[0] * displayRatio, imagePoints[1] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
