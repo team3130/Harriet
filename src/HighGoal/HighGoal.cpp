@@ -124,8 +124,12 @@ int main(int argc, const char** argv)
 		capture.open(0);
 		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
 		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
+		capture.set(cv::CAP_PROP_FPS, 7.5);
+		capture.set(cv::CAP_PROP_EXPOSURE, 0);
 		std::cerr << "Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
-			<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
+			<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT)
+			<< " FPS: " << capture.get(cv::CAP_PROP_FPS)
+			<< std::endl;
 //	}
 	if(!capture.isOpened()) {
 		std::cerr << "Couldn't connect to camera" << std::endl;
