@@ -15,20 +15,25 @@ static const char* detection_window = "Object Detection";
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const char* default_intrinsic_file = "jetson-camera-720.yml";
 
-void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUpper, cv::cuda::GpuMat dst) {
+void CheezyInRange(
+		cv::cuda::GpuMat src,
+		cv::Vec3i BlobLower,
+		cv::Vec3i BlobUpper,
+		cv::cuda::GpuMat dst,
+		cv::cuda::Stream stream = cv::cuda::Stream::Null()) {
 	cv::cuda::GpuMat channels[3];
-	cv::cuda::split(src, channels);
+	cv::cuda::split(src, channels, stream);
 	//threshold, reset to zero everything that is above the upper limit
-	cv::cuda::threshold(channels[0], channels[0], BlobUpper[0], 255, cv::THRESH_TOZERO_INV);
-	cv::cuda::threshold(channels[1], channels[1], BlobUpper[1], 255, cv::THRESH_TOZERO_INV);
-	cv::cuda::threshold(channels[2], channels[2], BlobUpper[2], 255, cv::THRESH_TOZERO_INV);
+	cv::cuda::threshold(channels[0], channels[0], BlobUpper[0], 255, cv::THRESH_TOZERO_INV, stream);
+	cv::cuda::threshold(channels[1], channels[1], BlobUpper[1], 255, cv::THRESH_TOZERO_INV, stream);
+	cv::cuda::threshold(channels[2], channels[2], BlobUpper[2], 255, cv::THRESH_TOZERO_INV, stream);
 	//threshold, reset to zero what is below the lower limit, otherwise to 255
-	cv::cuda::threshold(channels[0], channels[0], BlobLower[0], 255, cv::THRESH_BINARY);
-	cv::cuda::threshold(channels[1], channels[1], BlobLower[1], 255, cv::THRESH_BINARY);
-	cv::cuda::threshold(channels[2], channels[2], BlobLower[2], 255, cv::THRESH_BINARY);
+	cv::cuda::threshold(channels[0], channels[0], BlobLower[0], 255, cv::THRESH_BINARY, stream);
+	cv::cuda::threshold(channels[1], channels[1], BlobLower[1], 255, cv::THRESH_BINARY, stream);
+	cv::cuda::threshold(channels[2], channels[2], BlobLower[2], 255, cv::THRESH_BINARY, stream);
 	//combine all three channels and collapse them into one B/W image (to channels[0])
-	cv::cuda::bitwise_and(channels[0], channels[1], channels[0]);
-	cv::cuda::bitwise_and(channels[0], channels[2], dst);
+	cv::cuda::bitwise_and(channels[0], channels[1], channels[0], cv::noArray(), stream);
+	cv::cuda::bitwise_and(channels[0], channels[2], dst, cv::noArray(), stream);
 }
 
 void righten(cv::RotatedRect &rectangle)
@@ -142,8 +147,12 @@ int main(int argc, const char** argv)
 
 	gpu1.create(frameSize, CV_8UC1);
 	gpu2.create(frameSize, CV_8UC1);
+	cv::cuda::Stream cudastream;
 
 	for(;;) {
+		std::vector<long int> timer_values;
+		std::vector<std::string> timer_names;
+		timer_names.push_back("start"); timer_values.push_back(cv::getTickCount());
 		capture >> frame;
 		if (frame.empty()) {
 			std::cerr << " Error reading from camera, empty frame." << std::endl;
@@ -151,10 +160,17 @@ int main(int argc, const char** argv)
 			continue;
 		}
 		gpuC.upload(frame);
-		cv::cuda::cvtColor(gpuC, gpuC, CV_BGR2HSV);
-		CheezyInRange(gpuC, BlobLower, BlobUpper, gpu1);
-		erode->apply(gpu1, gpu2);
-		dilate->apply(gpu2, gpu1);
+		timer_names.push_back("uploaded"); timer_values.push_back(cv::getTickCount());
+
+		cv::cuda::cvtColor(gpuC, gpuC, CV_BGR2HSV, 0, cudastream);
+		CheezyInRange(gpuC, BlobLower, BlobUpper, gpu1, cudastream);
+		erode->apply(gpu1, gpu2, cudastream);
+		dilate->apply(gpu2, gpu1, cudastream);
+		timer_names.push_back("cuda sched"); timer_values.push_back(cv::getTickCount());
+
+		cudastream.waitForCompletion();
+		timer_names.push_back("cuda done"); timer_values.push_back(cv::getTickCount());
+
 
 		gpu1.download(filtered);
 		switch(dispMode) {
@@ -239,6 +255,7 @@ int main(int argc, const char** argv)
 					0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
 					0.9*displaySize.height - (displaySize.height/150)*tvec[2]
 					);
+			timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
 
 			table->PutNumber("Boiler Distance", cv::norm(tvec));
 			table->PutNumber("Boiler Yaw", 180.0*atan2(tvec[0],tvec[2])/CV_PI);
@@ -263,6 +280,13 @@ int main(int argc, const char** argv)
 		}
 
 		if (dispMode > 0) {
+			for(size_t i=1; i < timer_values.size(); ++i) {
+				long int val = timer_values[i] - timer_values[0];
+				std::ostringstream osst;
+				osst << timer_names[i] << ": " << val / cv::getTickFrequency();
+				cv::putText(display, osst.str(), cv::Point(20,40+20*i), 0, 0.33, cv::Scalar(0,200,200));
+			}
+
 			cv::imshow(detection_window, display);
 		}
 
