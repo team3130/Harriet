@@ -158,12 +158,16 @@ int main(int argc, const char** argv)
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
+#if 0
 	capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
 		<< ", width=(int)" << frameSize.width
 		<< ", height=(int)" << frameSize.height
 		<< ", format=(string)I420, framerate=(fraction)30/1 ! "
 		<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
 		<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
+#else
+	capturePipe << "0";
+#endif
 	if(!capture.open(capturePipe.str())) {
 		capture.open(0);
 		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
