@@ -120,13 +120,13 @@ int main(int argc, const char** argv)
 		<< ", format=(string)I420, framerate=(fraction)30/1 ! "
 		<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
 		<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
-	if(!capture.open(capturePipe.str())) {
+//	if(!capture.open(capturePipe.str())) {
 		capture.open(0);
 		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
 		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
 		std::cerr << "Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
 			<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
-	}
+//	}
 	if(!capture.isOpened()) {
 		std::cerr << "Couldn't connect to camera" << std::endl;
 		return 1;
