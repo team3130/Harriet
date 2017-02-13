@@ -125,7 +125,11 @@ int main(int argc, const char** argv)
 		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
 		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
 		capture.set(cv::CAP_PROP_FPS, 7.5);
+		capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
 		capture.set(cv::CAP_PROP_EXPOSURE, 0);
+		capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
+		capture.set(cv::CAP_PROP_CONTRAST, 0.5);
+		capture.set(cv::CAP_PROP_SATURATION, 0.5);
 		std::cerr << "Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
 			<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT)
 			<< " FPS: " << capture.get(cv::CAP_PROP_FPS)
