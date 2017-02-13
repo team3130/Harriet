@@ -68,6 +68,23 @@ bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortio
 	return true;
 }
 
+cv::Point2f intersect(cv::Point2f pivot, cv::Matx22f rotation, cv::Point one, cv::Point two)
+{
+	cv::Point2f ret(-1,-1);
+	cv::Point2f one_f(one), two_f(two);
+	cv::Vec2f one_v = rotation * (one_f - pivot);
+	cv::Vec2f two_v = rotation * (two_f - pivot);
+	if(one_v[0] > 0 and two_v[0] > 0) return ret;
+	if(one_v[0] < 0 and two_v[0] < 0) return ret;
+	if(one_v[0] == 0) return one_f;
+	if(two_v[0] == 0) return two_f;
+	float y0 = two_v[1] - two_v[0] * (one_v[1]-two_v[1])/(one_v[0]-two_v[0]);
+	ret = rotation.t() * cv::Point2f(0, y0) + pivot;
+	return ret;
+}
+
+bool compPoints(const cv::Point2f a, const cv::Point2f b) { return (a.y < b.y); }
+
 void FindMidPoints(std::vector<cv::Point> upCont, std::vector<cv::Point> dnCont, std::vector<cv::Point2f> &imagePoints)
 {
 	std::vector<cv::Point> new_points = upCont;
@@ -80,10 +97,31 @@ void FindMidPoints(std::vector<cv::Point> upCont, std::vector<cv::Point> dnCont,
 		if (big.angle >  90.0) big.angle -= 180;
 		if (big.angle < -90.0) big.angle += 180;
 	}
-	imagePoints.push_back(cv::Point(0,0));
-	imagePoints.push_back(cv::Point(0,0));
-	imagePoints.push_back(cv::Point(0,0));
-	imagePoints.push_back(cv::Point(0,0));
+	float cosT = cos(CV_PI*big.angle/180.0);
+	float sinT = sin(CV_PI*big.angle/180.0);
+	cv::Matx22f rmat(cosT, -sinT, sinT, cosT);
+
+	std::vector<cv::Point2f> pointsUp;
+	for(size_t i = 1; i < upCont.size(); ++i) {
+		cv::Point2f point = intersect(big.center, rmat, upCont[i-1], upCont[i]);
+		if(point != cv::Point2f(-1,-1)) pointsUp.push_back(point);
+	}
+	if(pointsUp.size() > 1) {
+		std::sort(pointsUp.begin(), pointsUp.end(), compPoints);
+		imagePoints.push_back(pointsUp.front());
+		imagePoints.push_back(pointsUp.back());
+	}
+
+	std::vector<cv::Point2f> pointsDn;
+	for(size_t i = 1; i < dnCont.size(); ++i) {
+		cv::Point2f point = intersect(big.center, rmat, dnCont[i-1], dnCont[i]);
+		if(point != cv::Point2f(-1,-1)) pointsDn.push_back(point);
+	}
+	if(pointsDn.size() > 1) {
+		std::sort(pointsDn.begin(), pointsDn.end(), compPoints);
+		imagePoints.push_back(pointsDn.front());
+		imagePoints.push_back(pointsDn.back());
+	}
 }
 
 int main(int argc, const char** argv)
@@ -233,6 +271,8 @@ int main(int argc, const char** argv)
 			cv::RotatedRect upRect, dnRect;
 			std::vector<cv::Point> upCont, dnCont;
 			float mscore = 999999;
+			float distance, yaw;
+			cv::Point dispTarget(displaySize.width/2,displaySize.height*0.9);
 
 			upRect = rect_one[0];
 			upCont = cont_one[0];
@@ -247,42 +287,48 @@ int main(int argc, const char** argv)
 			std::vector<cv::Point2f> imagePoints;
 			FindMidPoints(upCont, dnCont, imagePoints);
 
-			cv::Vec3d rvec, tvec;
-			cv::Matx33d rmat;
+			if(imagePoints.size() == 4) {
+				cv::Vec3d rvec, tvec;
+				cv::Matx33d rmat;
 
-			cv::solvePnP(
-					realPoints,       // 3-d points in object coordinate
-					imagePoints,        // 2-d points in image coordinates
-					intrinsic,           // Our camera matrix
-					distortion,
-					rvec,                // Output rotation *vector*.
-					tvec                 // Output translation vector.
-			);
-			cv::Rodrigues(rvec, rmat);
-			cv::Point dispTarget = cv::Point(
-					0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
-					0.9*displaySize.height - (displaySize.height/150)*tvec[2]
-					);
+				cv::solvePnP(
+						realPoints,       // 3-d points in object coordinate
+						imagePoints,        // 2-d points in image coordinates
+						intrinsic,           // Our camera matrix
+						distortion,
+						rvec,                // Output rotation *vector*.
+						tvec                 // Output translation vector.
+				);
+				cv::Rodrigues(rvec, rmat);
+				dispTarget = cv::Point(
+						0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
+						0.9*displaySize.height - (displaySize.height/150)*tvec[2]
+						);
+
+				distance = cv::norm(tvec);
+				yaw = 180.0*atan2(tvec[0],tvec[2])/CV_PI;
+				table->PutNumber("Boiler Distance", distance);
+				table->PutNumber("Boiler Yaw", yaw);
+			}
 			timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
 
-			table->PutNumber("Boiler Distance", cv::norm(tvec));
-			table->PutNumber("Boiler Yaw", 180.0*atan2(tvec[0],tvec[2])/CV_PI);
-
 			if (dispMode == 2) {
-				cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(0,125,255), 1);
-				cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(0,0,255), 1);
-				cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(125,255,0), 1);
-				cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(0,255,0), 1);
+				if(imagePoints.size() == 4) {
+					cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(0,125,255), 1);
+					cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(0,0,255), 1);
+					cv::circle(display, imagePoints[2]*displayRatio, 8, cv::Scalar(125,255,0), 1);
+					cv::circle(display, imagePoints[3]*displayRatio, 8, cv::Scalar(0,255,0), 1);
+				}
 
 				cv::line(display,
 						dispTarget,
 						cv::Point(displaySize.width/2,displaySize.height*0.9),
 						cv::Scalar(0,255,255));
 				std::ostringstream oss;
-				oss << "Yaw: " << 180.0*atan2(tvec[0],tvec[2])/CV_PI;
+				oss << "Yaw: " << yaw;
 				cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
 				std::ostringstream oss1;
-				oss1 << "Distance: " << cv::norm(tvec);
+				oss1 << "Distance: " << distance;
 				cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
 			}
 		}
