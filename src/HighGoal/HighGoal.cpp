@@ -13,7 +13,41 @@ static const cv::Size displaySize(640, 360);
 static const double displayRatio = double(displaySize.height) / frameSize.height;
 static const char* detection_window = "Object Detection";
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
+static const double BOILER_TAPE_RATIO = 2.5;
+static const double BOILER_TAPE_RATIO2 = BOILER_TAPE_RATIO/2;
 static const char* default_intrinsic_file = "jetson-camera-720.yml";
+
+struct RingRelation {
+	float rating;
+	std::vector<cv::Point> *my_cont;
+	std::vector<cv::Point> *other_cont;
+	cv::RotatedRect my_rect;
+	cv::RotatedRect other_rect;
+	float rate2rings(const RingRelation &other)
+	{
+		float rate = 0;
+		rate += fabs(my_rect.angle)/90.0; // angle is in (-90,+90), 90 is the best
+		rate += 1.0 - fabs(BOILER_TAPE_RATIO - my_rect.size.height/my_rect.size.width);
+		rate += 1.0 - fabs((my_rect.center.x-other_rect.center.x) / (my_rect.center.y-other_rect.center.y));
+		rate += 1.0 - fabs(BOILER_TAPE_RATIO2 - my_rect.size.height / norm(my_rect.center-other_rect.center));
+		return rate;
+	};
+	RingRelation(std::vector<cv::Point> *cont, cv::RotatedRect rect, const std::vector<RingRelation> &chain)
+		: rating(0), my_cont(cont), my_rect(rect), other_cont(cont), other_rect(rect)
+	{
+		for(auto&& other : chain) {
+			float temp = rate2rings(other);
+			if(temp > rating) {
+				rating = temp;
+				other_rect = other.my_rect;
+				other_cont = other.my_cont;
+			}
+		}
+	};
+	// This comparison operator is for sort. Reversed for descending order.
+	bool operator<(RingRelation &other) { return rating > other.rating; };
+};
+
 
 void CheezyInRange(
 		cv::cuda::GpuMat src,
@@ -85,25 +119,25 @@ cv::Point2f intersect(cv::Point2f pivot, cv::Matx22f rotation, cv::Point one, cv
 
 bool compPoints(const cv::Point2f a, const cv::Point2f b) { return (a.y < b.y); }
 
-void FindMidPoints(std::vector<cv::Point> upCont, std::vector<cv::Point> dnCont, std::vector<cv::Point2f> &imagePoints)
+void FindMidPoints(std::vector<cv::Point> *upCont, std::vector<cv::Point> *dnCont, std::vector<cv::Point2f> &imagePoints)
 {
-	std::vector<cv::Point> new_points = upCont;
-	new_points.reserve(upCont.size()+dnCont.size());
-	for(size_t i=0; i<dnCont.size(); ++i) new_points.push_back(dnCont[i]);
+	std::vector<cv::Point> new_points = *upCont;
+	new_points.reserve(upCont->size()+dnCont->size());
+	for(size_t i=0; i<dnCont->size(); ++i) new_points.push_back((*dnCont)[i]);
 	cv::RotatedRect big = cv::minAreaRect(new_points);
 	if(fabs(big.angle) > 45 and fabs(big.angle) < 135) {
 		std::swap(big.size.height, big.size.width);
-		big.angle = fmod(big.angle, 180.0);
+		big.angle = fmod(big.angle+90.0, 180.0);
 		if (big.angle >  90.0) big.angle -= 180;
 		if (big.angle < -90.0) big.angle += 180;
 	}
 	float cosT = cos(CV_PI*big.angle/180.0);
-	float sinT = sin(CV_PI*big.angle/180.0);
+	float sinT = -sin(CV_PI*big.angle/180.0); // RotatedRect::angle is clockwise, so negative
 	cv::Matx22f rmat(cosT, -sinT, sinT, cosT);
 
 	std::vector<cv::Point2f> pointsUp;
-	for(size_t i = 1; i < upCont.size(); ++i) {
-		cv::Point2f point = intersect(big.center, rmat, upCont[i-1], upCont[i]);
+	for(size_t i = 0; i < upCont->size(); ++i) {
+		cv::Point2f point = intersect(big.center, rmat, (*upCont)[i], (*upCont)[(i+1)%upCont->size()]);
 		if(point != cv::Point2f(-1,-1)) pointsUp.push_back(point);
 	}
 	if(pointsUp.size() > 1) {
@@ -113,8 +147,8 @@ void FindMidPoints(std::vector<cv::Point> upCont, std::vector<cv::Point> dnCont,
 	}
 
 	std::vector<cv::Point2f> pointsDn;
-	for(size_t i = 1; i < dnCont.size(); ++i) {
-		cv::Point2f point = intersect(big.center, rmat, dnCont[i-1], dnCont[i]);
+	for(size_t i = 0; i < dnCont->size(); ++i) {
+		cv::Point2f point = intersect(big.center, rmat, (*dnCont)[i], (*dnCont)[(i+1)%dnCont->size()]);
 		if(point != cv::Point2f(-1,-1)) pointsDn.push_back(point);
 	}
 	if(pointsDn.size() > 1) {
@@ -145,10 +179,10 @@ int main(int argc, const char** argv)
 	cv::Vec3d camera_offset(-7.0, -4.0, -12);
 
 	static std::vector<cv::Point3f> realPoints;
-	realPoints.push_back(cv::Point3f(-5.125,-2.5, 10.5)); // Top left
-	realPoints.push_back(cv::Point3f(-5.125, 2.5, 10.5)); // Bottom Left
-	realPoints.push_back(cv::Point3f( 5.125,-2.5, 10.5)); // Top right
-	realPoints.push_back(cv::Point3f( 5.125, 2.5, 10.5)); // Bottom right
+	realPoints.push_back(cv::Point3f(0,-4, 0));
+	realPoints.push_back(cv::Point3f(0, 0, 0.3));
+	realPoints.push_back(cv::Point3f(0, 4, 0.3));
+	realPoints.push_back(cv::Point3f(0, 6, 0));
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
@@ -164,7 +198,7 @@ int main(int argc, const char** argv)
 		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
 		capture.set(cv::CAP_PROP_FPS, 7.5);
 		capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
-		capture.set(cv::CAP_PROP_EXPOSURE, 0);
+		capture.set(cv::CAP_PROP_EXPOSURE, 1);
 		capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
 		capture.set(cv::CAP_PROP_CONTRAST, 0.5);
 		capture.set(cv::CAP_PROP_SATURATION, 0.5);
@@ -231,66 +265,34 @@ int main(int argc, const char** argv)
 		std::vector<std::vector<cv::Point>> contours;
 		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
 
-		std::vector<cv::Point> cont_one[3];
-		cv::RotatedRect rect_one[3];
-		float biggest[3] = {0,0,0};
-		for (std::vector<cv::Point> cont : contours)
+		std::vector<RingRelation> graph;
+		for (auto&& cont : contours)
 		{
 			cv::RotatedRect rect = cv::minAreaRect(cont);
 			float area = rect.size.height * rect.size.width;
 			if (area < MIN_AREA) continue;
 			righten(rect);
-
-			if (area > biggest[0]) {
-				cont_one[2] = cont_one[1];
-				cont_one[1] = cont_one[0];
-				cont_one[0] = cont;
-				rect_one[2] = rect_one[1];
-				rect_one[1] = rect_one[0];
-				rect_one[0] = rect;
-				biggest[2] = biggest[1];
-				biggest[1] = biggest[0];
-				biggest[0] = area;
-			}
-			else if (area > biggest[1]) {
-				cont_one[2] = cont_one[1];
-				cont_one[1] = cont;
-				rect_one[2] = rect_one[1];
-				rect_one[1] = rect;
-				biggest[2] = biggest[1];
-				biggest[1] = area;
-			}
-			else if (area > biggest[2]) {
-				cont_one[2] = cont;
-				rect_one[2] = rect;
-				biggest[2] = area;
-			}
+			if (fabs(rect.angle) < 45) continue;
+			graph.push_back(RingRelation(&cont, rect, graph));
 		}
+		std::sort(graph.begin(), graph.end());
 
-		if (biggest[0] > 0 && biggest[1] > 0) {
-			cv::RotatedRect upRect, dnRect;
-			std::vector<cv::Point> upCont, dnCont;
-			float mscore = 999999;
+		if (graph.size() > 1) {
 			float distance, yaw;
 			cv::Point dispTarget(displaySize.width/2,displaySize.height*0.9);
 
-			upRect = rect_one[0];
-			upCont = cont_one[0];
-			dnRect = rect_one[1];
-			dnCont = cont_one[1];
-
-			if (upRect.center.x > dnRect.center.x) {
-				std::swap(upRect, dnRect);
-				std::swap(upCont, dnCont);
+			std::vector<cv::Point2f> imagePoints;
+			if (graph[0].my_rect.center.y < graph[1].my_rect.center.y) {
+				FindMidPoints(graph[0].my_cont, graph[1].my_cont, imagePoints);
+			}
+			else {
+				FindMidPoints(graph[1].my_cont, graph[0].my_cont, imagePoints);
 			}
 
-			std::vector<cv::Point2f> imagePoints;
-			FindMidPoints(upCont, dnCont, imagePoints);
 
+			cv::Vec3d rvec, tvec;
+//			cv::Matx33d rmat;
 			if(imagePoints.size() == 4) {
-				cv::Vec3d rvec, tvec;
-				cv::Matx33d rmat;
-
 				cv::solvePnP(
 						realPoints,       // 3-d points in object coordinate
 						imagePoints,        // 2-d points in image coordinates
@@ -299,7 +301,7 @@ int main(int argc, const char** argv)
 						rvec,                // Output rotation *vector*.
 						tvec                 // Output translation vector.
 				);
-				cv::Rodrigues(rvec, rmat);
+//				cv::Rodrigues(rvec, rmat);
 				dispTarget = cv::Point(
 						0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
 						0.9*displaySize.height - (displaySize.height/150)*tvec[2]
@@ -314,10 +316,10 @@ int main(int argc, const char** argv)
 
 			if (dispMode == 2) {
 				if(imagePoints.size() == 4) {
-					cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(0,125,255), 1);
-					cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(0,0,255), 1);
-					cv::circle(display, imagePoints[2]*displayRatio, 8, cv::Scalar(125,255,0), 1);
-					cv::circle(display, imagePoints[3]*displayRatio, 8, cv::Scalar(0,255,0), 1);
+					cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(  0,  0,200), 1);
+					cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(  0,200,200), 1);
+					cv::circle(display, imagePoints[2]*displayRatio, 8, cv::Scalar(  0,200,  0), 1);
+					cv::circle(display, imagePoints[3]*displayRatio, 8, cv::Scalar(200,  0,  0), 1);
 				}
 
 				cv::line(display,
@@ -325,7 +327,7 @@ int main(int argc, const char** argv)
 						cv::Point(displaySize.width/2,displaySize.height*0.9),
 						cv::Scalar(0,255,255));
 				std::ostringstream oss;
-				oss << "Yaw: " << yaw;
+				oss << "Yaw: " << yaw << " Tvec: " << imagePoints;
 				cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
 				std::ostringstream oss1;
 				oss1 << "Distance: " << distance;
