@@ -291,8 +291,8 @@ int main(int argc, const char** argv)
 
 
 			cv::Vec3d rvec, tvec;
-//			cv::Matx33d rmat;
 			if(imagePoints.size() == 4) {
+#if 0
 				cv::solvePnP(
 						realPoints,       // 3-d points in object coordinate
 						imagePoints,        // 2-d points in image coordinates
@@ -301,7 +301,6 @@ int main(int argc, const char** argv)
 						rvec,                // Output rotation *vector*.
 						tvec                 // Output translation vector.
 				);
-//				cv::Rodrigues(rvec, rmat);
 				dispTarget = cv::Point(
 						0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
 						0.9*displaySize.height - (displaySize.height/150)*tvec[2]
@@ -309,6 +308,11 @@ int main(int argc, const char** argv)
 
 				distance = cv::norm(tvec);
 				yaw = 180.0*atan2(tvec[0],tvec[2])/CV_PI;
+#else
+				float dee = cv::norm(imagePoints[0] - imagePoints[3]);
+				distance = intrinsic.at<double>(1,1) * fabs(realPoints[3].y-realPoints[0].y) / dee; // *cos(theta) for tilted cam
+				yaw = 0;
+#endif
 				table->PutNumber("Boiler Distance", distance);
 				table->PutNumber("Boiler Yaw", yaw);
 			}
