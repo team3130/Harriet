@@ -16,16 +16,18 @@ static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const double BOILER_TAPE_RATIO = 2.5;
 static const double BOILER_TAPE_RATIO2 = BOILER_TAPE_RATIO/2;
 static const char* default_intrinsic_file = "jetson-camera-720.yml";
+static const double CAMERA_GOAL_HEIGHT = 69; //!<- Tower height is 97" and the camera is 19" above the floor
+static const double CAMERA_ZERO_DIST = 130; //!<- Tower height is 97" and the camera is 12" above the floor
 
 struct RingRelation {
-	float rating;
+	double rating;
 	std::vector<cv::Point> *my_cont;
 	std::vector<cv::Point> *other_cont;
 	cv::RotatedRect my_rect;
 	cv::RotatedRect other_rect;
-	float rate2rings(const RingRelation &other)
+	double rate2rings(const RingRelation &other)
 	{
-		float rate = 0;
+		double rate = 0;
 		rate += fabs(my_rect.angle)/90.0; // angle is in (-90,+90), 90 is the best
 		rate += 1.0 - fabs(BOILER_TAPE_RATIO - my_rect.size.height/my_rect.size.width);
 		rate += 1.0 - fabs((my_rect.center.x-other_rect.center.x) / (my_rect.center.y-other_rect.center.y));
@@ -36,7 +38,7 @@ struct RingRelation {
 		: rating(0), my_cont(cont), my_rect(rect), other_cont(cont), other_rect(rect)
 	{
 		for(auto&& other : chain) {
-			float temp = rate2rings(other);
+			double temp = rate2rings(other);
 			if(temp > rating) {
 				rating = temp;
 				other_rect = other.my_rect;
@@ -102,24 +104,24 @@ bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortio
 	return true;
 }
 
-cv::Point2f intersect(cv::Point2f pivot, cv::Matx22f rotation, cv::Point one, cv::Point two)
+cv::Point2d intersect(cv::Point2d pivot, cv::Matx22d rotation, cv::Point one, cv::Point two)
 {
-	cv::Point2f ret(-1,-1);
-	cv::Point2f one_f(one), two_f(two);
-	cv::Vec2f one_v = rotation * (one_f - pivot);
-	cv::Vec2f two_v = rotation * (two_f - pivot);
+	cv::Point2d ret(-1,-1);
+	cv::Point2d one_f(one), two_f(two);
+	cv::Vec2d one_v = rotation * (one_f - pivot);
+	cv::Vec2d two_v = rotation * (two_f - pivot);
 	if(one_v[0] > 0 and two_v[0] > 0) return ret;
 	if(one_v[0] < 0 and two_v[0] < 0) return ret;
 	if(one_v[0] == 0) return one_f;
 	if(two_v[0] == 0) return two_f;
-	float y0 = two_v[1] - two_v[0] * (one_v[1]-two_v[1])/(one_v[0]-two_v[0]);
-	ret = rotation.t() * cv::Point2f(0, y0) + pivot;
+	double y0 = two_v[1] - two_v[0] * (one_v[1]-two_v[1])/(one_v[0]-two_v[0]);
+	ret = rotation.t() * cv::Point2d(0, y0) + pivot;
 	return ret;
 }
 
-bool compPoints(const cv::Point2f a, const cv::Point2f b) { return (a.y < b.y); }
+bool compPoints(const cv::Point2d a, const cv::Point2d b) { return (a.y < b.y); }
 
-void FindMidPoints(std::vector<cv::Point> *upCont, std::vector<cv::Point> *dnCont, std::vector<cv::Point2f> &imagePoints)
+void FindMidPoints(std::vector<cv::Point> *upCont, std::vector<cv::Point> *dnCont, std::vector<cv::Point2d> &imagePoints)
 {
 	std::vector<cv::Point> new_points = *upCont;
 	new_points.reserve(upCont->size()+dnCont->size());
@@ -131,14 +133,14 @@ void FindMidPoints(std::vector<cv::Point> *upCont, std::vector<cv::Point> *dnCon
 		if (big.angle >  90.0) big.angle -= 180;
 		if (big.angle < -90.0) big.angle += 180;
 	}
-	float cosT = cos(CV_PI*big.angle/180.0);
-	float sinT = -sin(CV_PI*big.angle/180.0); // RotatedRect::angle is clockwise, so negative
-	cv::Matx22f rmat(cosT, -sinT, sinT, cosT);
+	double cosT = cos(CV_PI*big.angle/180.0);
+	double sinT = -sin(CV_PI*big.angle/180.0); // RotatedRect::angle is clockwise, so negative
+	cv::Matx22d rmat(cosT, -sinT, sinT, cosT);
 
-	std::vector<cv::Point2f> pointsUp;
+	std::vector<cv::Point2d> pointsUp;
 	for(size_t i = 0; i < upCont->size(); ++i) {
-		cv::Point2f point = intersect(big.center, rmat, (*upCont)[i], (*upCont)[(i+1)%upCont->size()]);
-		if(point != cv::Point2f(-1,-1)) pointsUp.push_back(point);
+		cv::Point2d point = intersect(big.center, rmat, (*upCont)[i], (*upCont)[(i+1)%upCont->size()]);
+		if(point != cv::Point2d(-1,-1)) pointsUp.push_back(point);
 	}
 	if(pointsUp.size() > 1) {
 		std::sort(pointsUp.begin(), pointsUp.end(), compPoints);
@@ -146,10 +148,10 @@ void FindMidPoints(std::vector<cv::Point> *upCont, std::vector<cv::Point> *dnCon
 		imagePoints.push_back(pointsUp.back());
 	}
 
-	std::vector<cv::Point2f> pointsDn;
+	std::vector<cv::Point2d> pointsDn;
 	for(size_t i = 0; i < dnCont->size(); ++i) {
-		cv::Point2f point = intersect(big.center, rmat, (*dnCont)[i], (*dnCont)[(i+1)%dnCont->size()]);
-		if(point != cv::Point2f(-1,-1)) pointsDn.push_back(point);
+		cv::Point2d point = intersect(big.center, rmat, (*dnCont)[i], (*dnCont)[(i+1)%dnCont->size()]);
+		if(point != cv::Point2d(-1,-1)) pointsDn.push_back(point);
 	}
 	if(pointsDn.size() > 1) {
 		std::sort(pointsDn.begin(), pointsDn.end(), compPoints);
@@ -169,6 +171,7 @@ int main(int argc, const char** argv)
 	NetworkTable::SetClientMode();
 	NetworkTable::SetTeam(3130);
 	std::shared_ptr<NetworkTable> table = NetworkTable::GetTable("/Jetson");
+	std::shared_ptr<NetworkTable> preferences = NetworkTable::GetTable("/Preferences");
 
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
@@ -178,11 +181,11 @@ int main(int argc, const char** argv)
 
 	cv::Vec3d camera_offset(-7.0, -4.0, -12);
 
-	static std::vector<cv::Point3f> realPoints;
-	realPoints.push_back(cv::Point3f(0,-4, 0));
-	realPoints.push_back(cv::Point3f(0, 0, 0.3));
-	realPoints.push_back(cv::Point3f(0, 4, 0.3));
-	realPoints.push_back(cv::Point3f(0, 6, 0));
+	static std::vector<cv::Point3d> realPoints;
+	realPoints.push_back(cv::Point3d(0,-4, 0));
+	realPoints.push_back(cv::Point3d(0, 0, 0.3));
+	realPoints.push_back(cv::Point3d(0, 4, 0.3));
+	realPoints.push_back(cv::Point3d(0, 6, 0));
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
@@ -269,7 +272,7 @@ int main(int argc, const char** argv)
 		for (auto&& cont : contours)
 		{
 			cv::RotatedRect rect = cv::minAreaRect(cont);
-			float area = rect.size.height * rect.size.width;
+			double area = rect.size.height * rect.size.width;
 			if (area < MIN_AREA) continue;
 			righten(rect);
 			if (fabs(rect.angle) < 45) continue;
@@ -278,10 +281,10 @@ int main(int argc, const char** argv)
 		std::sort(graph.begin(), graph.end());
 
 		if (graph.size() > 1) {
-			float distance, yaw;
+			double distance, yaw;
 			cv::Point dispTarget(displaySize.width/2,displaySize.height*0.9);
 
-			std::vector<cv::Point2f> imagePoints;
+			std::vector<cv::Point2d> imagePoints;
 			if (graph[0].my_rect.center.y < graph[1].my_rect.center.y) {
 				FindMidPoints(graph[0].my_cont, graph[1].my_cont, imagePoints);
 			}
@@ -309,9 +312,26 @@ int main(int argc, const char** argv)
 				distance = cv::norm(tvec);
 				yaw = 180.0*atan2(tvec[0],tvec[2])/CV_PI;
 #else
-				float dee = cv::norm(imagePoints[0] - imagePoints[3]);
-				distance = intrinsic.at<double>(1,1) * fabs(realPoints[3].y-realPoints[0].y) / dee; // *cos(theta) for tilted cam
-				yaw = 0;
+				std::vector<cv::Point2d> undistortedPoints;
+				cv::undistortPoints(imagePoints, undistortedPoints, intrinsic, distortion, cv::noArray(), intrinsic);
+				double cam_tilt = preferences->GetNumber("Front Camera Tilt", 0);
+				cv::Vec3d cam_offset(-18, 0, -18);
+				double cam_cos = cos(CV_PI*cam_tilt/180.0);
+				double dee = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
+				distance = cam_cos * intrinsic.at<double>(1,1) * fabs(realPoints[3].y-realPoints[0].y) / dee;
+
+				double m_zenith = intrinsic.at<double>(0,0) * preferences->GetNumber("CameraZeroDist", CAMERA_ZERO_DIST) / preferences->GetNumber("CameraHeight", CAMERA_GOAL_HEIGHT);
+				double m_horizon = intrinsic.at<double>(0,0) * preferences->GetNumber("CameraHeight", CAMERA_GOAL_HEIGHT) / preferences->GetNumber("CameraZeroDist", CAMERA_ZERO_DIST);
+				double m_flat = sqrt(intrinsic.at<double>(0,0)*intrinsic.at<double>(0,0) + m_horizon*m_horizon);
+
+				// dX is the offset of the target from the frame's center to the left
+				float dX = undistortedPoints[0].x - intrinsic.at<double>(0,2);
+				// dY is the distance from the zenith to the target on the image
+				float dY = m_zenith + undistortedPoints[0].y - intrinsic.at<double>(1,2);
+				// The real azimuth to the target is on the horizon, so scale it accordingly
+				float azimuth = dX * ((m_zenith + m_horizon) / dY);
+				yaw = atan2(azimuth, m_flat);
+
 #endif
 				table->PutNumber("Boiler Distance", distance);
 				table->PutNumber("Boiler Yaw", yaw);
