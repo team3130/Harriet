@@ -175,8 +175,8 @@ int main(int argc, const char** argv)
 
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower(24, 128,  55);
-	static cv::Vec3i BlobUpper(48, 255, 255);
+	static cv::Vec3i BlobLower(40, 150,  28);
+	static cv::Vec3i BlobUpper(96, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
 	cv::Vec3d camera_offset(-7.0, -4.0, -12);

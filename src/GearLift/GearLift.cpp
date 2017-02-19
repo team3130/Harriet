@@ -8,6 +8,8 @@
 #include "opencv2/cudaimgproc.hpp"
 #include "opencv2/cudafilters.hpp"
 
+#undef XGUI_ENABLED
+
 static const cv::Size frameSize(1280, 720);
 static const cv::Size displaySize(640, 360);
 static const double displayRatio = double(displaySize.height) / frameSize.height;
@@ -144,11 +146,11 @@ int main(int argc, const char** argv)
 
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower(24, 128,  55);
-	static cv::Vec3i BlobUpper(48, 255, 255);
+	static cv::Vec3i BlobLower(66, 200,  56);
+	static cv::Vec3i BlobUpper(94, 255, 255);
 	static int dispMode = 0; // 0: none, 1: bw, 2: color
 
-	cv::Vec3d camera_offset(-7.0, -4.0, -12);
+	cv::Vec3d camera_offset(-13.0, -4.0, 0.0);
 
 	static std::vector<cv::Point3f> realPoints;
 	realPoints.push_back(cv::Point3f(-5.125,-2.5, 10.5)); // Top left
@@ -158,7 +160,7 @@ int main(int argc, const char** argv)
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
-#if 0
+#ifdef ICS_CAMERA_PRESENT
 	capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
 		<< ", width=(int)" << frameSize.width
 		<< ", height=(int)" << frameSize.height
@@ -166,12 +168,18 @@ int main(int argc, const char** argv)
 		<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
 		<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
 #else
-	capturePipe << "0";
+	capturePipe << "NoCSIcamera";
 #endif
 	if(!capture.open(capturePipe.str())) {
-		capture.open(0);
+		capture.open(1);
 		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
 		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
+		capture.set(cv::CAP_PROP_FPS, 7.5);
+		capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
+		capture.set(cv::CAP_PROP_EXPOSURE, 0);
+		capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
+		capture.set(cv::CAP_PROP_CONTRAST, 0.5);
+		capture.set(cv::CAP_PROP_SATURATION, 0.5);
 		std::cerr << "Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
 			<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
 	}
@@ -180,6 +188,7 @@ int main(int argc, const char** argv)
 		return 1;
 	}
 
+#ifdef XGUI_ENABLED
 	cv::namedWindow(detection_window, cv::WINDOW_NORMAL);
 	cv::createTrackbar("Lo H",detection_window, &BlobLower[0], 255);
 	cv::createTrackbar("Hi H",detection_window, &BlobUpper[0], 255);
@@ -187,6 +196,7 @@ int main(int argc, const char** argv)
 	cv::createTrackbar("Hi S",detection_window, &BlobUpper[1], 255);
 	cv::createTrackbar("Lo V",detection_window, &BlobLower[2], 255);
 	cv::createTrackbar("Hi V",detection_window, &BlobUpper[2], 255);
+#endif
 
 	int elemSize(5);
 	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(elemSize+1,elemSize+1));
@@ -200,7 +210,7 @@ int main(int argc, const char** argv)
 		capture >> frame;
 		if (frame.empty()) {
 			std::cerr << " Error reading from camera, empty frame." << std::endl;
-			if(cv::waitKey(5 * 1000) > 0) break;
+			if(cv::waitKey(5 * 1000) & 0xFF == 27) break;
 			continue;
 		}
 		gpuC.upload(frame);
@@ -210,6 +220,8 @@ int main(int argc, const char** argv)
 		dilate->apply(gpu2, gpu1);
 
 		gpu1.download(filtered);
+
+#ifdef XGUI_ENABLED
 		switch(dispMode) {
 		case 1:
 			cv::resize(filtered, display, displaySize);
@@ -218,6 +230,7 @@ int main(int argc, const char** argv)
 			cv::resize(frame, display, displaySize);
 			break;
 		}
+#endif
 
 		std::vector<std::vector<cv::Point>> contours;
 		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
@@ -322,18 +335,19 @@ int main(int argc, const char** argv)
 			cv::Rodrigues(rvec, rmat);
 			// tvec is where the target is in the camera coordinates
 			// We offset it with the camera_offset vector and rotate opposite to the target's rotation
-			lvec = rmat.t() * (tvec + camera_offset);
-			cv::Vec3d peg = rmat.t() * (tvec + camera_offset);
+			lvec = rmat.t() * -(tvec + camera_offset);
+
+			table->PutNumber("Peg Crossrange", lvec[0]);
+			table->PutNumber("Peg Downrange", -lvec[2]); // Robot is in negative Z area. We expect positive down range
+			table->PutNumber("Peg Yaw", atan2(tvec[0],tvec[2]));
+
+#ifdef XGUI_ENABLED
 			cv::Point dispTarget = cv::Point(
 					0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
 					0.9*displaySize.height - (displaySize.height/150)*tvec[2]
 					);
+			cv::Vec3d peg = rmat.t() * (tvec + camera_offset);
 			cv::Point peg2D = displaySize.height/10 * (cv::Point2d(peg[0],peg[2]) / cv::norm(peg));
-
-			table->PutNumber("Peg Crossrange", lvec[0]);
-			table->PutNumber("Peg Downrange", lvec[2]);
-			table->PutNumber("Peg Yaw", 180.0*atan2(tvec[0],tvec[2])/CV_PI);
-
 			if (dispMode == 2) {
 				cv::line(display, imagePoints[0] * displayRatio, imagePoints[1] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
 				cv::line(display, imagePoints[1] * displayRatio, imagePoints[3] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
@@ -363,8 +377,10 @@ int main(int argc, const char** argv)
 				oss2 << "Crossrange: " << lvec[0];
 				cv::putText(display, oss2.str(), cv::Point(20,60), 0, 0.33, cv::Scalar(0,200,200));
 			}
+#endif
 		}
 
+#ifdef XGUI_ENABLED
 		if (dispMode > 0) {
 			cv::imshow(detection_window, display);
 		}
@@ -375,6 +391,7 @@ int main(int argc, const char** argv)
 			if(++dispMode > 2) dispMode =0;
 		}
 		if ((key & 255) == 's') cv::waitKey(0);
+#endif
 	}
 	return 0;
 }
