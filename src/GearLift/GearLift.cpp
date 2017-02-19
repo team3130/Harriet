@@ -1,19 +1,26 @@
+#undef XGUI_ENABLED
+
 #include <iostream>
 #include <memory>
+#include <chrono>
+#include <thread>
+#include <ctime>
 #include "networktables/NetworkTable.h"
 #include "opencv2/opencv.hpp"
-#include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/cudaarithm.hpp"
 #include "opencv2/cudaimgproc.hpp"
 #include "opencv2/cudafilters.hpp"
 
-#undef XGUI_ENABLED
+#ifdef XGUI_ENABLED
+	#include "opencv2/highgui.hpp"
+	static const cv::Size displaySize(640, 360);
+	static const double displayRatio = double(displaySize.height) / frameSize.height;
+	static const char* detection_window = "Object Detection";
+#endif
 
 static const cv::Size frameSize(1280, 720);
-static const cv::Size displaySize(640, 360);
-static const double displayRatio = double(displaySize.height) / frameSize.height;
-static const char* detection_window = "Object Detection";
+
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const char* default_intrinsic_file = "jetson-camera-720.yml";
 
@@ -111,12 +118,18 @@ float rate3rects(cv::RotatedRect one, cv::RotatedRect two, cv::RotatedRect three
 	return acc;
 }
 
+std::string date_now()
+{
+    std::time_t result = std::time(nullptr);
+    return std::string(std::asctime(std::localtime(&result)));
+}
+
 bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortion)
 {
 	cv::FileStorage fs( filename, cv::FileStorage::READ );
 	if( !fs.isOpened() )
 	{
-		std::cerr << "Error: Couldn't open intrinsic parameters file "
+		std::cerr << date_now() << " Error: Couldn't open intrinsic parameters file "
 				<< filename << std::endl;
 		return false;
 	}
@@ -124,7 +137,7 @@ bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortio
 	fs["distortion_coefficients"] >> distortion;
 	if( intrinsic.empty() || distortion.empty() )
 	{
-		std::cerr << "Error: Couldn't load intrinsic parameters from "
+		std::cerr <<date_now() << " Error: Couldn't load intrinsic parameters from "
 				<< filename << std::endl;
 		return false;
 	}
@@ -160,33 +173,35 @@ int main(int argc, const char** argv)
 
 	cv::VideoCapture capture;
 	std::ostringstream capturePipe;
+	for(;;) {
 #ifdef ICS_CAMERA_PRESENT
-	capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
-		<< ", width=(int)" << frameSize.width
-		<< ", height=(int)" << frameSize.height
-		<< ", format=(string)I420, framerate=(fraction)30/1 ! "
-		<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
-		<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
+		capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
+			<< ", width=(int)" << frameSize.width
+			<< ", height=(int)" << frameSize.height
+			<< ", format=(string)I420, framerate=(fraction)30/1 ! "
+			<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
+			<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
 #else
-	capturePipe << "NoCSIcamera";
+		capturePipe << "NoCSIcamera";
 #endif
-	if(!capture.open(capturePipe.str())) {
-		capture.open(1);
-		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
-		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
-		capture.set(cv::CAP_PROP_FPS, 7.5);
-		capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
-		capture.set(cv::CAP_PROP_EXPOSURE, 0);
-		capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
-		capture.set(cv::CAP_PROP_CONTRAST, 0.5);
-		capture.set(cv::CAP_PROP_SATURATION, 0.5);
-		std::cerr << "Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
-			<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
+		if(!capture.open(capturePipe.str())) {
+			capture.open(1);
+			capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
+			capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
+			capture.set(cv::CAP_PROP_FPS, 7.5);
+			capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
+			capture.set(cv::CAP_PROP_EXPOSURE, 0);
+			capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
+			capture.set(cv::CAP_PROP_CONTRAST, 0.5);
+			capture.set(cv::CAP_PROP_SATURATION, 0.5);
+		}
+		if(capture.isOpened()) break;
+
+		std::cerr << date_now() << " Couldn't connect to camera.. sleeping." << std::endl;
+		std::this_thread::sleep_for(std::chrono::seconds(5));
 	}
-	if(!capture.isOpened()) {
-		std::cerr << "Couldn't connect to camera" << std::endl;
-		return 1;
-	}
+	std::cerr << date_now() << " Camera connected. Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
+						<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
 
 #ifdef XGUI_ENABLED
 	cv::namedWindow(detection_window, cv::WINDOW_NORMAL);
@@ -209,8 +224,8 @@ int main(int argc, const char** argv)
 	for(;;) {
 		capture >> frame;
 		if (frame.empty()) {
-			std::cerr << " Error reading from camera, empty frame." << std::endl;
-			if(cv::waitKey(5 * 1000) & 0xFF == 27) break;
+			std::cerr << date_now() << " Error reading from camera, empty frame." << std::endl;
+			std::this_thread::sleep_for(std::chrono::seconds(2));
 			continue;
 		}
 		gpuC.upload(frame);
