@@ -1,5 +1,3 @@
-#undef XGUI_ENABLED
-
 #include <iostream>
 #include <memory>
 #include <chrono>
@@ -12,17 +10,16 @@
 #include "opencv2/cudaimgproc.hpp"
 #include "opencv2/cudafilters.hpp"
 
+static const cv::Size frameSize(1280, 720);
+static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
+static const char* default_intrinsic_file = "jetson-camera-720.yml";
+
 #ifdef XGUI_ENABLED
 	#include "opencv2/highgui.hpp"
 	static const cv::Size displaySize(640, 360);
 	static const double displayRatio = double(displaySize.height) / frameSize.height;
 	static const char* detection_window = "Object Detection";
 #endif
-
-static const cv::Size frameSize(1280, 720);
-
-static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
-static const char* default_intrinsic_file = "jetson-camera-720.yml";
 
 void CheezyInRange(cv::cuda::GpuMat src, cv::Vec3i BlobLower, cv::Vec3i BlobUpper, cv::cuda::GpuMat dst) {
 	cv::cuda::GpuMat channels[3];
@@ -159,7 +156,7 @@ int main(int argc, const char** argv)
 
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower(66, 200,  56);
+	static cv::Vec3i BlobLower(66, 200,  30);
 	static cv::Vec3i BlobUpper(94, 255, 255);
 	static int dispMode = 0; // 0: none, 1: bw, 2: color
 
@@ -172,8 +169,8 @@ int main(int argc, const char** argv)
 	realPoints.push_back(cv::Point3f( 5.125, 2.5, 10.5)); // Bottom right
 
 	cv::VideoCapture capture;
-	std::ostringstream capturePipe;
 	for(;;) {
+		std::ostringstream capturePipe;
 #ifdef ICS_CAMERA_PRESENT
 		capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
 			<< ", width=(int)" << frameSize.width

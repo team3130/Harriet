@@ -1,23 +1,29 @@
 #include <iostream>
 #include <memory>
+#include <chrono>
+#include <thread>
+#include <ctime>
 #include "networktables/NetworkTable.h"
 #include "opencv2/opencv.hpp"
-#include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/cudaarithm.hpp"
 #include "opencv2/cudaimgproc.hpp"
 #include "opencv2/cudafilters.hpp"
 
 static const cv::Size frameSize(1280, 720);
-static const cv::Size displaySize(640, 360);
-static const double displayRatio = double(displaySize.height) / frameSize.height;
-static const char* detection_window = "Object Detection";
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const double BOILER_TAPE_RATIO = 2.5;
 static const double BOILER_TAPE_RATIO2 = BOILER_TAPE_RATIO/2;
 static const char* default_intrinsic_file = "jetson-camera-720.yml";
 static const double CAMERA_GOAL_HEIGHT = 69; //!<- Tower height is 97" and the camera is 19" above the floor
 static const double CAMERA_ZERO_DIST = 130; //!<- Tower height is 97" and the camera is 12" above the floor
+
+#ifdef XGUI_ENABLED
+	#include "opencv2/highgui.hpp"
+	static const cv::Size displaySize(640, 360);
+	static const double displayRatio = double(displaySize.height) / frameSize.height;
+	static const char* detection_window = "Object Detection";
+#endif
 
 struct RingRelation {
 	double rating;
@@ -175,8 +181,8 @@ int main(int argc, const char** argv)
 
 	cv::Mat frame, filtered, display;
 	cv::cuda::GpuMat gpuC, gpu1, gpu2;
-	static cv::Vec3i BlobLower(40, 150,  28);
-	static cv::Vec3i BlobUpper(96, 255, 255);
+	static cv::Vec3i BlobLower(66, 200,  30);
+	static cv::Vec3i BlobUpper(94, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
 	cv::Vec3d camera_offset(-7.0, -4.0, -12);
@@ -188,33 +194,34 @@ int main(int argc, const char** argv)
 	realPoints.push_back(cv::Point3d(0, 6, 0));
 
 	cv::VideoCapture capture;
-	std::ostringstream capturePipe;
-	capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
-		<< ", width=(int)" << frameSize.width
-		<< ", height=(int)" << frameSize.height
-		<< ", format=(string)I420, framerate=(fraction)30/1 ! "
-		<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
-		<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
-//	if(!capture.open(capturePipe.str())) {
-		capture.open(0);
-		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
-		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
-		capture.set(cv::CAP_PROP_FPS, 7.5);
-		capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
-		capture.set(cv::CAP_PROP_EXPOSURE, 1);
-		capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
-		capture.set(cv::CAP_PROP_CONTRAST, 0.5);
-		capture.set(cv::CAP_PROP_SATURATION, 0.5);
-		std::cerr << "Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
-			<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT)
-			<< " FPS: " << capture.get(cv::CAP_PROP_FPS)
-			<< std::endl;
-//	}
-	if(!capture.isOpened()) {
+	for(;;) {
+		std::ostringstream capturePipe;
+		capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
+			<< ", width=(int)" << frameSize.width
+			<< ", height=(int)" << frameSize.height
+			<< ", format=(string)I420, framerate=(fraction)30/1 ! "
+			<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
+			<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
+	//	if(!capture.open(capturePipe.str())) {
+			capture.open(0);
+			capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
+			capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
+			capture.set(cv::CAP_PROP_FPS, 7.5);
+			capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
+			capture.set(cv::CAP_PROP_EXPOSURE, 0);
+			capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
+			capture.set(cv::CAP_PROP_CONTRAST, 0.5);
+			capture.set(cv::CAP_PROP_SATURATION, 0.5);
+			std::cerr << "Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
+				<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT)
+				<< " FPS: " << capture.get(cv::CAP_PROP_FPS)
+				<< std::endl;
+	//	}
+		if(capture.isOpened()) break;
 		std::cerr << "Couldn't connect to camera" << std::endl;
-		return 1;
 	}
 
+#ifdef XGUI_ENABLED
 	cv::namedWindow(detection_window, cv::WINDOW_NORMAL);
 	cv::createTrackbar("Lo H",detection_window, &BlobLower[0], 255);
 	cv::createTrackbar("Hi H",detection_window, &BlobUpper[0], 255);
@@ -222,6 +229,7 @@ int main(int argc, const char** argv)
 	cv::createTrackbar("Hi S",detection_window, &BlobUpper[1], 255);
 	cv::createTrackbar("Lo V",detection_window, &BlobLower[2], 255);
 	cv::createTrackbar("Hi V",detection_window, &BlobUpper[2], 255);
+#endif
 
 	int elemSize(5);
 	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(elemSize+1,elemSize+1));
@@ -233,15 +241,15 @@ int main(int argc, const char** argv)
 	cv::cuda::Stream cudastream;
 
 	for(;;) {
-		std::vector<long int> timer_values;
-		std::vector<std::string> timer_names;
-		timer_names.push_back("start"); timer_values.push_back(cv::getTickCount());
 		capture >> frame;
 		if (frame.empty()) {
 			std::cerr << " Error reading from camera, empty frame." << std::endl;
-			if(cv::waitKey(5 * 1000) > 0) break;
+			std::this_thread::sleep_for(std::chrono::seconds(2));
 			continue;
 		}
+		std::vector<long int> timer_values;
+		std::vector<std::string> timer_names;
+		timer_names.push_back("start"); timer_values.push_back(cv::getTickCount());
 		gpuC.upload(frame);
 		timer_names.push_back("uploaded"); timer_values.push_back(cv::getTickCount());
 
@@ -256,6 +264,8 @@ int main(int argc, const char** argv)
 
 
 		gpu1.download(filtered);
+
+#ifdef XGUI_ENABLED
 		switch(dispMode) {
 		case 1:
 			cv::resize(filtered, display, displaySize);
@@ -264,6 +274,7 @@ int main(int argc, const char** argv)
 			cv::resize(frame, display, displaySize);
 			break;
 		}
+#endif
 
 		std::vector<std::vector<cv::Point>> contours;
 		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
@@ -282,7 +293,10 @@ int main(int argc, const char** argv)
 
 		if (graph.size() > 1) {
 			double distance, yaw;
+
+#ifdef XGUI_ENABLED
 			cv::Point dispTarget(displaySize.width/2,displaySize.height*0.9);
+#endif
 
 			std::vector<cv::Point2d> imagePoints;
 			if (graph[0].my_rect.center.y < graph[1].my_rect.center.y) {
@@ -295,26 +309,9 @@ int main(int argc, const char** argv)
 
 			cv::Vec3d rvec, tvec;
 			if(imagePoints.size() == 4) {
-#if 0
-				cv::solvePnP(
-						realPoints,       // 3-d points in object coordinate
-						imagePoints,        // 2-d points in image coordinates
-						intrinsic,           // Our camera matrix
-						distortion,
-						rvec,                // Output rotation *vector*.
-						tvec                 // Output translation vector.
-				);
-				dispTarget = cv::Point(
-						0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
-						0.9*displaySize.height - (displaySize.height/150)*tvec[2]
-						);
-
-				distance = cv::norm(tvec);
-				yaw = 180.0*atan2(tvec[0],tvec[2])/CV_PI;
-#else
 				std::vector<cv::Point2d> undistortedPoints;
 				cv::undistortPoints(imagePoints, undistortedPoints, intrinsic, distortion, cv::noArray(), intrinsic);
-				double cam_tilt = preferences->GetNumber("Front Camera Tilt", 0);
+				double cam_tilt = preferences->GetNumber("Front Camera Tilt", 40);
 				cv::Vec3d cam_offset(-18, 0, -18);
 				double cam_cos = cos(CV_PI*cam_tilt/180.0);
 				double dee = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
@@ -324,20 +321,21 @@ int main(int argc, const char** argv)
 				double m_horizon = intrinsic.at<double>(0,0) * preferences->GetNumber("CameraHeight", CAMERA_GOAL_HEIGHT) / preferences->GetNumber("CameraZeroDist", CAMERA_ZERO_DIST);
 				double m_flat = sqrt(intrinsic.at<double>(0,0)*intrinsic.at<double>(0,0) + m_horizon*m_horizon);
 
-				// dX is the offset of the target from the frame's center to the left
+				// dX is the offset of the target from the focal center to the right
 				float dX = undistortedPoints[0].x - intrinsic.at<double>(0,2);
 				// dY is the distance from the zenith to the target on the image
 				float dY = m_zenith + undistortedPoints[0].y - intrinsic.at<double>(1,2);
 				// The real azimuth to the target is on the horizon, so scale it accordingly
 				float azimuth = dX * ((m_zenith + m_horizon) / dY);
-				yaw = atan2(azimuth, m_flat);
+				// Vehicle's yaw is negative arc tangent from the current heading to the target
+				yaw = -atan2(azimuth, m_flat);
 
-#endif
 				table->PutNumber("Boiler Distance", distance);
 				table->PutNumber("Boiler Yaw", yaw);
 			}
 			timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
 
+#ifdef XGUI_ENABLED
 			if (dispMode == 2) {
 				if(imagePoints.size() == 4) {
 					cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(  0,  0,200), 1);
@@ -357,8 +355,10 @@ int main(int argc, const char** argv)
 				oss1 << "Distance: " << distance;
 				cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
 			}
+#endif
 		}
 
+#ifdef XGUI_ENABLED
 		if (dispMode > 0) {
 			for(size_t i=1; i < timer_values.size(); ++i) {
 				long int val = timer_values[i] - timer_values[0];
@@ -376,6 +376,7 @@ int main(int argc, const char** argv)
 			if(++dispMode > 2) dispMode =0;
 		}
 		if ((key & 255) == 's') cv::waitKey(0);
+#endif
 	}
 	return 0;
 }
