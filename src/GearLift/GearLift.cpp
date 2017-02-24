@@ -142,6 +142,42 @@ bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortio
 	return true;
 }
 
+bool initCamera(cv::VideoCapture &capture)
+{
+	for(int i = 0; i < 12; ++i) {
+		std::ostringstream capturePipe;
+	#ifdef ICS_CAMERA_PRESENT
+		capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
+			<< ", width=(int)" << frameSize.width
+			<< ", height=(int)" << frameSize.height
+			<< ", format=(string)I420, framerate=(fraction)30/1 ! "
+			<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
+			<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
+	#else
+		capturePipe << "NoCSIcamera";
+	#endif
+		if(!capture.open(capturePipe.str())) {
+			capture.open(1);
+			capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
+			capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
+			capture.set(cv::CAP_PROP_FPS, 7.5);
+			capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
+			capture.set(cv::CAP_PROP_EXPOSURE, 0);
+			capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
+			capture.set(cv::CAP_PROP_CONTRAST, 0.5);
+			capture.set(cv::CAP_PROP_SATURATION, 0.5);
+		}
+		if(capture.isOpened()) {
+			std::this_thread::sleep_for(std::chrono::seconds(2));
+			std::cerr << date_now() << " Camera connected. Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
+								<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
+			return true;
+		}
+		std::cerr << date_now() << " Couldn't connect to camera.. sleeping [" << i << "]" << std::endl;
+		std::this_thread::sleep_for(std::chrono::seconds(5));
+	}
+}
+
 int main(int argc, const char** argv)
 {
 	const char* intrinsic_file = default_intrinsic_file;
@@ -169,36 +205,7 @@ int main(int argc, const char** argv)
 	realPoints.push_back(cv::Point3f( 5.125, 2.5, 10.5)); // Bottom right
 
 	cv::VideoCapture capture;
-	for(;;) {
-		std::ostringstream capturePipe;
-#ifdef ICS_CAMERA_PRESENT
-		capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
-			<< ", width=(int)" << frameSize.width
-			<< ", height=(int)" << frameSize.height
-			<< ", format=(string)I420, framerate=(fraction)30/1 ! "
-			<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
-			<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
-#else
-		capturePipe << "NoCSIcamera";
-#endif
-		if(!capture.open(capturePipe.str())) {
-			capture.open(1);
-			capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
-			capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
-			capture.set(cv::CAP_PROP_FPS, 7.5);
-			capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
-			capture.set(cv::CAP_PROP_EXPOSURE, 0);
-			capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
-			capture.set(cv::CAP_PROP_CONTRAST, 0.5);
-			capture.set(cv::CAP_PROP_SATURATION, 0.5);
-		}
-		if(capture.isOpened()) break;
-
-		std::cerr << date_now() << " Couldn't connect to camera.. sleeping." << std::endl;
-		std::this_thread::sleep_for(std::chrono::seconds(5));
-	}
-	std::cerr << date_now() << " Camera connected. Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
-						<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << std::endl;
+	if(! initCamera(capture)) return 1;
 
 #ifdef XGUI_ENABLED
 	cv::namedWindow(detection_window, cv::WINDOW_NORMAL);
@@ -218,11 +225,16 @@ int main(int argc, const char** argv)
 	gpu1.create(frameSize, CV_8UC1);
 	gpu2.create(frameSize, CV_8UC1);
 
+	int nofEmpty = 0;
 	for(;;) {
 		capture >> frame;
 		if (frame.empty()) {
 			std::cerr << date_now() << " Error reading from camera, empty frame." << std::endl;
 			std::this_thread::sleep_for(std::chrono::seconds(2));
+			if(nofEmpty++ > 10) {
+				nofEmpty = 0;
+				if( ! initCamera(capture) ) return 1;
+			}
 			continue;
 		}
 		gpuC.upload(frame);
@@ -283,6 +295,7 @@ int main(int argc, const char** argv)
 			}
 		}
 
+		table->PutNumber("Peg Sys Time", cv::getTickCount() / cv::getTickFrequency());
 		if (biggest[0] > 0 && biggest[1] > 0) {
 			cv::RotatedRect lRect, rRect;
 			std::vector<cv::Point> lCont, rCont;
@@ -352,6 +365,7 @@ int main(int argc, const char** argv)
 			table->PutNumber("Peg Crossrange", lvec[0]);
 			table->PutNumber("Peg Downrange", -lvec[2]); // Robot is in negative Z area. We expect positive down range
 			table->PutNumber("Peg Yaw", atan2(tvec[0],tvec[2]));
+			table->PutNumber("Peg Time", cv::getTickCount() / cv::getTickFrequency());
 
 #ifdef XGUI_ENABLED
 			cv::Point dispTarget = cv::Point(
