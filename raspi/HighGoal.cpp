@@ -9,8 +9,9 @@
 #include "opencv2/opencv.hpp"
 #include "opencv2/imgproc.hpp"
 
-static const cv::Size frameSize(480, 270);
+static const cv::Size frameSize(640,480);
 //static const cv::Size frameSize(1280, 720);
+static const double cameraFPS = 8;
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const double BOILER_TAPE_RATIO = 2.5;
 static const double BOILER_TAPE_RATIO2 = BOILER_TAPE_RATIO/2;
@@ -184,7 +185,7 @@ int main(int argc, const char** argv)
 			capture.open(0);
 			capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
 			capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
-			capture.set(cv::CAP_PROP_FPS, 12);
+			capture.set(cv::CAP_PROP_FPS, cameraFPS);
 			capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
 			capture.set(cv::CAP_PROP_EXPOSURE, 0.001);
 			capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
@@ -213,6 +214,7 @@ int main(int argc, const char** argv)
 	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(elemSize+1,elemSize+1));
 
 	for(;;) {
+		table->PutNumber("Boiler Sys Time", cv::getTickCount()/cv::getTickFrequency());
 		capture >> frame;
 		if (frame.empty()) {
 			std::cerr << " Error reading from camera, empty frame." << std::endl;
@@ -298,6 +300,7 @@ int main(int argc, const char** argv)
 
 				table->PutNumber("Boiler Distance", distance);
 				table->PutNumber("Boiler Yaw", yaw);
+				table->PutNumber("Boiler Time", cv::getTickCount()/cv::getTickFrequency());
 			}
 			timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
 

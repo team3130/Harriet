@@ -82,8 +82,8 @@ int main(int argc, const char** argv)
 
 	cv::VideoCapture capture;
 	for(;;) {
-		capture.open(0);
-		capture.set(cv::CAP_PROP_FOURCC, 0x30323449);
+		capture.open("videotestsrc ! video/x-raw, width=640, height=480 ! appsin");
+		capture.set(cv::CAP_PROP_CONVERT_RGB, 0);
 		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
 		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
 		capture.set(cv::CAP_PROP_FPS, 12);
