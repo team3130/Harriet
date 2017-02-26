@@ -18,11 +18,18 @@ static const char* default_intrinsic_file = "jetson-camera-720.yml";
 static const double CAMERA_GOAL_HEIGHT = 69; //!<- Tower height is 97" and the camera is 19" above the floor
 static const double CAMERA_ZERO_DIST = 130; //!<- Tower height is 97" and the camera is 12" above the floor
 
+static cv::Mat intrinsic, distortion;
+static std::shared_ptr<NetworkTable> table;
+static std::shared_ptr<NetworkTable> preferences;
+static const std::vector<cv::Point3d> realBoiler {{0,-4, 0}, {0, 0, 0.3}, {0, 4, 0.3}, {0, 6, 0}};
+static const cv::Vec3d boiler_camera_offset(8.0, -14.0, 12);
+
 #ifdef XGUI_ENABLED
 	#include "opencv2/highgui.hpp"
 	static const cv::Size displaySize(320, 240);
 	static const double displayRatio = double(displaySize.height) / frameSize.height;
 	static const char* detection_window = "Object Detection";
+	static cv::Mat display;
 #endif
 
 std::string date_now()
@@ -81,7 +88,7 @@ void righten(cv::RotatedRect &rectangle)
 	if (rectangle.angle < -90.0) rectangle.angle += 180;
 }
 
-bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortion)
+bool readIntrinsics(const char *filename)
 {
 	cv::FileStorage fs( filename, cv::FileStorage::READ );
 	if( !fs.isOpened() )
@@ -158,31 +165,110 @@ void FindMidPoints(std::vector<cv::Point> *upCont, std::vector<cv::Point> *dnCon
 	}
 }
 
+bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
+{
+	// First build a graph of relationships between contours
+	std::vector<RingRelation> graph;
+	for (auto&& cont : contours)
+	{
+		cv::RotatedRect rect = cv::minAreaRect(cont);
+		double area = rect.size.height * rect.size.width;
+		if (area < MIN_AREA) continue;
+		// All small noise is ignored at this point
+		righten(rect);
+		// Righten rectangle makes the longer side be "vertical" (virtually, to measure angle)
+		if (fabs(rect.angle) < 45) continue;
+		// We are only interested in horizontal-ish shapes for the boiler detection
+		graph.push_back(RingRelation(&cont, rect, graph));
+	}
+	std::sort(graph.begin(), graph.end());
+
+	if (graph.size() > 1) {
+		double distance, yaw;
+
+		std::vector<cv::Point2d> imagePoints;
+		// Take the two best relationships and find the mid points
+		// choosing which one is on the top first (by the y coordinate)
+		if (graph[0].my_rect.center.y < graph[1].my_rect.center.y) {
+			FindMidPoints(graph[0].my_cont, graph[1].my_cont, imagePoints);
+		}
+		else {
+			FindMidPoints(graph[1].my_cont, graph[0].my_cont, imagePoints);
+		}
+
+		if(imagePoints.size() == 4) {
+			// Now as we have only 4 points we can undistort their coordinates using camera intrinsics
+			std::vector<cv::Point2d> undistortedPoints;
+			cv::undistortPoints(imagePoints, undistortedPoints, intrinsic, distortion, cv::noArray(), intrinsic);
+
+			double cam_tilt = preferences->GetNumber("Front Camera Tilt", 40);
+			cv::Vec3d cam_offset(-18, 0, -18);
+			double cam_cos = cos(CV_PI*cam_tilt/180.0);
+			double dee = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
+			distance = cam_cos * intrinsic.at<double>(1,1) * fabs(realBoiler[3].y-realBoiler[0].y) / dee;
+
+			double m_zenith = intrinsic.at<double>(0,0) * preferences->GetNumber("CameraZeroDist", CAMERA_ZERO_DIST) / preferences->GetNumber("CameraHeight", CAMERA_GOAL_HEIGHT);
+			double m_horizon = intrinsic.at<double>(0,0) * preferences->GetNumber("CameraHeight", CAMERA_GOAL_HEIGHT) / preferences->GetNumber("CameraZeroDist", CAMERA_ZERO_DIST);
+			double m_flat = sqrt(intrinsic.at<double>(0,0)*intrinsic.at<double>(0,0) + m_horizon*m_horizon);
+
+			// dX is the offset of the target from the focal center to the right
+			float dX = undistortedPoints[0].x - intrinsic.at<double>(0,2);
+			// dY is the distance from the zenith to the target on the image
+			float dY = m_zenith + undistortedPoints[0].y - intrinsic.at<double>(1,2);
+			// The real azimuth to the target is on the horizon, so scale it accordingly
+			float azimuth = dX * ((m_zenith + m_horizon) / dY);
+			// Vehicle's yaw is negative arc tangent from the current heading to the target
+			yaw = -atan2(azimuth, m_flat);
+
+			table->PutNumber("Boiler Distance", distance);
+			table->PutNumber("Boiler Yaw", yaw);
+			table->PutNumber("Boiler Time", cv::getTickCount()/cv::getTickFrequency());
+#ifdef XGUI_ENABLED
+			cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(  0,  0,200), 1);
+			cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(  0,200,200), 1);
+			cv::circle(display, imagePoints[2]*displayRatio, 8, cv::Scalar(  0,200,  0), 1);
+			cv::circle(display, imagePoints[3]*displayRatio, 8, cv::Scalar(200,  0,  0), 1);
+
+			double targetScale = 1.0 / 240.0; // 240 inches is about max distance
+			cv::Point dispTarget(
+					displaySize.width * (0.5 - distance * sin(yaw) *targetScale),
+					displaySize.height* (0.9 - distance * cos(yaw) *targetScale)
+					);
+
+			cv::line(display,
+					dispTarget,
+					cv::Point(displaySize.width/2,displaySize.height*0.9),
+					cv::Scalar(0,255,255));
+			std::ostringstream oss;
+			oss << "Yaw: " << yaw;
+			cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
+			std::ostringstream oss1;
+			oss1 << "Distance: " << distance;
+			cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
+#endif
+			return true;
+		}
+	}
+	return false;
+}
+
 int main(int argc, const char** argv)
 {
 	const char* intrinsic_file = default_intrinsic_file;
 	if(argc > 1) intrinsic_file = argv[1];
 
-	cv::Mat intrinsic, distortion;
-	if(!readIntrinsics(intrinsic_file, intrinsic, distortion)) return -1;
+	if(!readIntrinsics(intrinsic_file)) return -1;
 
 	NetworkTable::SetClientMode();
 	NetworkTable::SetTeam(3130);
-	std::shared_ptr<NetworkTable> table = NetworkTable::GetTable("/Jetson");
-	std::shared_ptr<NetworkTable> preferences = NetworkTable::GetTable("/Preferences");
+	table = NetworkTable::GetTable("/Jetson");
+	preferences = NetworkTable::GetTable("/Preferences");
 
-	cv::Mat frame, hsv, filtered, buffer1, display;
+	cv::Mat frame, hsv, filtered, buffer1;
 	static cv::Vec3i BlobLower(66, 200,  30);
 	static cv::Vec3i BlobUpper(94, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
-	cv::Vec3d camera_offset(-7.0, -4.0, -12);
-
-	static std::vector<cv::Point3d> realPoints;
-	realPoints.push_back(cv::Point3d(0,-4, 0));
-	realPoints.push_back(cv::Point3d(0, 0, 0.3));
-	realPoints.push_back(cv::Point3d(0, 4, 0.3));
-	realPoints.push_back(cv::Point3d(0, 6, 0));
 
 	cv::VideoCapture capture;
 	for(;;) {
@@ -256,85 +342,10 @@ int main(int argc, const char** argv)
 		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
 		timer_names.push_back("contours found"); timer_values.push_back(cv::getTickCount());
 
-		std::vector<RingRelation> graph;
-		for (auto&& cont : contours)
-		{
-			cv::RotatedRect rect = cv::minAreaRect(cont);
-			double area = rect.size.height * rect.size.width;
-			if (area < MIN_AREA) continue;
-			righten(rect);
-			if (fabs(rect.angle) < 45) continue;
-			graph.push_back(RingRelation(&cont, rect, graph));
-		}
-		std::sort(graph.begin(), graph.end());
-
-		if (graph.size() > 1) {
-			double distance, yaw;
-
-			std::vector<cv::Point2d> imagePoints;
-			if (graph[0].my_rect.center.y < graph[1].my_rect.center.y) {
-				FindMidPoints(graph[0].my_cont, graph[1].my_cont, imagePoints);
-			}
-			else {
-				FindMidPoints(graph[1].my_cont, graph[0].my_cont, imagePoints);
-			}
-
-			if(imagePoints.size() == 4) {
-				std::vector<cv::Point2d> undistortedPoints;
-				cv::undistortPoints(imagePoints, undistortedPoints, intrinsic, distortion, cv::noArray(), intrinsic);
-				double cam_tilt = preferences->GetNumber("Front Camera Tilt", 40);
-				cv::Vec3d cam_offset(-18, 0, -18);
-				double cam_cos = cos(CV_PI*cam_tilt/180.0);
-				double dee = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
-				distance = cam_cos * intrinsic.at<double>(1,1) * fabs(realPoints[3].y-realPoints[0].y) / dee;
-
-				double m_zenith = intrinsic.at<double>(0,0) * preferences->GetNumber("CameraZeroDist", CAMERA_ZERO_DIST) / preferences->GetNumber("CameraHeight", CAMERA_GOAL_HEIGHT);
-				double m_horizon = intrinsic.at<double>(0,0) * preferences->GetNumber("CameraHeight", CAMERA_GOAL_HEIGHT) / preferences->GetNumber("CameraZeroDist", CAMERA_ZERO_DIST);
-				double m_flat = sqrt(intrinsic.at<double>(0,0)*intrinsic.at<double>(0,0) + m_horizon*m_horizon);
-
-				// dX is the offset of the target from the focal center to the right
-				float dX = undistortedPoints[0].x - intrinsic.at<double>(0,2);
-				// dY is the distance from the zenith to the target on the image
-				float dY = m_zenith + undistortedPoints[0].y - intrinsic.at<double>(1,2);
-				// The real azimuth to the target is on the horizon, so scale it accordingly
-				float azimuth = dX * ((m_zenith + m_horizon) / dY);
-				// Vehicle's yaw is negative arc tangent from the current heading to the target
-				yaw = -atan2(azimuth, m_flat);
-
-				table->PutNumber("Boiler Distance", distance);
-				table->PutNumber("Boiler Yaw", yaw);
-				table->PutNumber("Boiler Time", cv::getTickCount()/cv::getTickFrequency());
-			}
-			timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
+		ProcessHighGoal(contours);
 
 #ifdef XGUI_ENABLED
-			if (dispMode == 2 and imagePoints.size() == 4) {
-				cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(  0,  0,200), 1);
-				cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(  0,200,200), 1);
-				cv::circle(display, imagePoints[2]*displayRatio, 8, cv::Scalar(  0,200,  0), 1);
-				cv::circle(display, imagePoints[3]*displayRatio, 8, cv::Scalar(200,  0,  0), 1);
-
-				double targetScale = 1.0 / 240.0; // 240 inches is about max distance
-				cv::Point dispTarget(
-						displaySize.width * (0.5 - distance * sin(yaw) *targetScale),
-						displaySize.height* (0.9 - distance * cos(yaw) *targetScale)
-						);
-
-				cv::line(display,
-						dispTarget,
-						cv::Point(displaySize.width/2,displaySize.height*0.9),
-						cv::Scalar(0,255,255));
-				std::ostringstream oss;
-				oss << "Yaw: " << yaw;
-				cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
-				std::ostringstream oss1;
-				oss1 << "Distance: " << distance;
-				cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
-			}
-#endif
-		}
-
-#ifdef XGUI_ENABLED
+		timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
 		if (dispMode > 0) {
 			for(size_t i = 0; i < timer_values.size(); ++i) {
 				long int val;
