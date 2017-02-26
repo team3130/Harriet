@@ -10,7 +10,6 @@
 #include "opencv2/imgproc.hpp"
 
 static const cv::Size frameSize(640,480);
-//static const cv::Size frameSize(1280, 720);
 static const double cameraFPS = 8;
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const double BOILER_TAPE_RATIO = 2.5;
@@ -25,6 +24,19 @@ static const double CAMERA_ZERO_DIST = 130; //!<- Tower height is 97" and the ca
 	static const double displayRatio = double(displaySize.height) / frameSize.height;
 	static const char* detection_window = "Object Detection";
 #endif
+
+std::string date_now()
+{
+	std::time_t result = std::time(nullptr);
+	std::string str(std::asctime(std::localtime(&result)));
+	// trim trailing endl
+	size_t endpos = str.find_last_not_of(" \t\n");
+	if( str.npos != endpos )
+	{
+	    str = str.substr( 0, endpos+1 );
+	}
+	return str + " ";
+}
 
 struct RingRelation {
 	double rating;
@@ -74,7 +86,7 @@ bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortio
 	cv::FileStorage fs( filename, cv::FileStorage::READ );
 	if( !fs.isOpened() )
 	{
-		std::cerr << "Error: Couldn't open intrinsic parameters file "
+		std::cerr << date_now() << " Error: Couldn't open intrinsic parameters file "
 				<< filename << std::endl;
 		return false;
 	}
@@ -82,7 +94,7 @@ bool readIntrinsics(const char *filename, cv::Mat &intrinsic, cv::Mat &distortio
 	fs["distortion_coefficients"] >> distortion;
 	if( intrinsic.empty() || distortion.empty() )
 	{
-		std::cerr << "Error: Couldn't load intrinsic parameters from "
+		std::cerr << date_now() << " Error: Couldn't load intrinsic parameters from "
 				<< filename << std::endl;
 		return false;
 	}
@@ -174,31 +186,24 @@ int main(int argc, const char** argv)
 
 	cv::VideoCapture capture;
 	for(;;) {
-		std::ostringstream capturePipe;
-		capturePipe << "nvcamerasrc ! video/x-raw(memory:NVMM)"
-			<< ", width=(int)" << frameSize.width
-			<< ", height=(int)" << frameSize.height
-			<< ", format=(string)I420, framerate=(fraction)30/1 ! "
-			<< "nvvidconv flip-method=2 ! video/x-raw, format=(string)BGRx ! "
-			<< "videoconvert ! video/x-raw, format=(string)BGR ! appsink";
-	//	if(!capture.open(capturePipe.str())) {
-			capture.open(0);
-			capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
-			capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
-			capture.set(cv::CAP_PROP_FPS, cameraFPS);
-			capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
-			capture.set(cv::CAP_PROP_EXPOSURE, 0.001);
-			capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
-			capture.set(cv::CAP_PROP_CONTRAST, 0.5);
-			capture.set(cv::CAP_PROP_SATURATION, 0.5);
-			std::cerr << "Resolution: "<< capture.get(cv::CAP_PROP_FRAME_WIDTH)
-				<< "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT)
-				<< " FPS: " << capture.get(cv::CAP_PROP_FPS)
-				<< std::endl;
-	//	}
+		capture.open(0);
+		capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
+		capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
+		capture.set(cv::CAP_PROP_FPS, cameraFPS);
+		capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
+		capture.set(cv::CAP_PROP_EXPOSURE, 0.001);
+		capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
+		capture.set(cv::CAP_PROP_CONTRAST, 0.5);
+		capture.set(cv::CAP_PROP_SATURATION, 0.5);
 		if(capture.isOpened()) break;
 		std::cerr << "Couldn't connect to camera" << std::endl;
+		std::this_thread::sleep_for(std::chrono::seconds(5));
 	}
+	std::cerr << date_now() << "Camera opened."
+			<< " Resolution: " << capture.get(cv::CAP_PROP_FRAME_WIDTH)
+			<<             "x" << capture.get(cv::CAP_PROP_FRAME_HEIGHT)
+			<< " FPS: "        << capture.get(cv::CAP_PROP_FPS)
+			<< std::endl;
 
 #ifdef XGUI_ENABLED
 	cv::namedWindow(detection_window, cv::WINDOW_NORMAL);
@@ -210,11 +215,14 @@ int main(int argc, const char** argv)
 	cv::createTrackbar("Hi V",detection_window, &BlobUpper[2], 255);
 #endif
 
-	int elemSize(5);
-	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(elemSize+1,elemSize+1));
+	// Initialize an element (reusable) for morphology filters
+	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(4,4));
 
 	for(;;) {
+		// System timer always runs so we can see the coprocessor is online
+		// and can compare the last measurement time against the current time.
 		table->PutNumber("Boiler Sys Time", cv::getTickCount()/cv::getTickFrequency());
+
 		capture >> frame;
 		if (frame.empty()) {
 			std::cerr << " Error reading from camera, empty frame." << std::endl;
@@ -227,9 +235,10 @@ int main(int argc, const char** argv)
 
 		cv::cvtColor(frame, hsv, CV_BGR2HSV);
 		inRange(hsv, BlobLower, BlobUpper, filtered);
+		timer_names.push_back("inRange applied"); timer_values.push_back(cv::getTickCount());
 		erode(filtered, filtered, element);
 		dilate(filtered, filtered, element);
-		timer_names.push_back("filters applied"); timer_values.push_back(cv::getTickCount());
+		timer_names.push_back("de-noise applied"); timer_values.push_back(cv::getTickCount());
 
 #ifdef XGUI_ENABLED
 		switch(dispMode) {
@@ -240,9 +249,9 @@ int main(int argc, const char** argv)
 			cv::resize(frame, display, displaySize);
 			break;
 		}
+		timer_names.push_back("display resized"); timer_values.push_back(cv::getTickCount());
 #endif
 
-		timer_names.push_back("display resized"); timer_values.push_back(cv::getTickCount());
 		std::vector<std::vector<cv::Point>> contours;
 		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
 		timer_names.push_back("contours found"); timer_values.push_back(cv::getTickCount());
@@ -261,10 +270,6 @@ int main(int argc, const char** argv)
 
 		if (graph.size() > 1) {
 			double distance, yaw;
-
-#ifdef XGUI_ENABLED
-			cv::Point dispTarget(displaySize.width/2,displaySize.height*0.9);
-#endif
 
 			std::vector<cv::Point2d> imagePoints;
 			if (graph[0].my_rect.center.y < graph[1].my_rect.center.y) {
@@ -312,6 +317,12 @@ int main(int argc, const char** argv)
 					cv::circle(display, imagePoints[2]*displayRatio, 8, cv::Scalar(  0,200,  0), 1);
 					cv::circle(display, imagePoints[3]*displayRatio, 8, cv::Scalar(200,  0,  0), 1);
 				}
+
+				double targetScale = 240.0/displaySize.height; // 240 inches is about max distance
+				cv::Point dispTarget(
+						displaySize.width * (0.5 - distance * sin(yaw) *targetScale),
+						displaySize.height* (0.9 - distance * cos(yaw) *targetScale)
+						);
 
 				cv::line(display,
 						dispTarget,
