@@ -171,7 +171,7 @@ int main(int argc, const char** argv)
 	std::shared_ptr<NetworkTable> table = NetworkTable::GetTable("/Jetson");
 	std::shared_ptr<NetworkTable> preferences = NetworkTable::GetTable("/Preferences");
 
-	cv::Mat frame, hsv, filtered, display;
+	cv::Mat frame, hsv, filtered, buffer1, display;
 	static cv::Vec3i BlobLower(66, 200,  30);
 	static cv::Vec3i BlobUpper(94, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
@@ -236,8 +236,8 @@ int main(int argc, const char** argv)
 		cv::cvtColor(frame, hsv, CV_BGR2HSV);
 		inRange(hsv, BlobLower, BlobUpper, filtered);
 		timer_names.push_back("inRange applied"); timer_values.push_back(cv::getTickCount());
-		erode(filtered, filtered, element);
-		dilate(filtered, filtered, element);
+		erode(filtered, buffer1, element);
+		dilate(buffer1, filtered, element);
 		timer_names.push_back("de-noise applied"); timer_values.push_back(cv::getTickCount());
 
 #ifdef XGUI_ENABLED
@@ -279,8 +279,6 @@ int main(int argc, const char** argv)
 				FindMidPoints(graph[1].my_cont, graph[0].my_cont, imagePoints);
 			}
 
-
-			cv::Vec3d rvec, tvec;
 			if(imagePoints.size() == 4) {
 				std::vector<cv::Point2d> undistortedPoints;
 				cv::undistortPoints(imagePoints, undistortedPoints, intrinsic, distortion, cv::noArray(), intrinsic);
@@ -327,7 +325,7 @@ int main(int argc, const char** argv)
 						cv::Point(displaySize.width/2,displaySize.height*0.9),
 						cv::Scalar(0,255,255));
 				std::ostringstream oss;
-				oss << "Yaw: " << yaw << " Tvec: " << imagePoints;
+				oss << "Yaw: " << yaw;
 				cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
 				std::ostringstream oss1;
 				oss1 << "Distance: " << distance;
@@ -338,11 +336,13 @@ int main(int argc, const char** argv)
 
 #ifdef XGUI_ENABLED
 		if (dispMode > 0) {
-			for(size_t i=1; i < timer_values.size(); ++i) {
-				long int val = timer_values[i] - timer_values[i-1];
+			for(size_t i = 0; i < timer_values.size(); ++i) {
+				long int val;
+				if(i == 0) val = timer_values[timer_values.size()-1] - timer_values[0];
+				else val = timer_values[i] - timer_values[i-1];
 				std::ostringstream osst;
 				osst << timer_names[i] << ": " << val / cv::getTickFrequency();
-				cv::putText(display, osst.str(), cv::Point(20,40+20*i), 0, 0.33, cv::Scalar(0,200,200));
+				cv::putText(display, osst.str(), cv::Point(20,60+20*i), 0, 0.33, cv::Scalar(0,200,200));
 			}
 
 			cv::imshow(detection_window, display);
