@@ -20,7 +20,7 @@ static const double CAMERA_ZERO_DIST = 130; //!<- Tower height is 97" and the ca
 
 #ifdef XGUI_ENABLED
 	#include "opencv2/highgui.hpp"
-	static const cv::Size displaySize(320, 180);
+	static const cv::Size displaySize(320, 240);
 	static const double displayRatio = double(displaySize.height) / frameSize.height;
 	static const char* detection_window = "Object Detection";
 #endif
@@ -310,15 +310,13 @@ int main(int argc, const char** argv)
 			timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
 
 #ifdef XGUI_ENABLED
-			if (dispMode == 2) {
-				if(imagePoints.size() == 4) {
-					cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(  0,  0,200), 1);
-					cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(  0,200,200), 1);
-					cv::circle(display, imagePoints[2]*displayRatio, 8, cv::Scalar(  0,200,  0), 1);
-					cv::circle(display, imagePoints[3]*displayRatio, 8, cv::Scalar(200,  0,  0), 1);
-				}
+			if (dispMode == 2 and imagePoints.size() == 4) {
+				cv::circle(display, imagePoints[0]*displayRatio, 8, cv::Scalar(  0,  0,200), 1);
+				cv::circle(display, imagePoints[1]*displayRatio, 8, cv::Scalar(  0,200,200), 1);
+				cv::circle(display, imagePoints[2]*displayRatio, 8, cv::Scalar(  0,200,  0), 1);
+				cv::circle(display, imagePoints[3]*displayRatio, 8, cv::Scalar(200,  0,  0), 1);
 
-				double targetScale = 240.0/displaySize.height; // 240 inches is about max distance
+				double targetScale = 1.0 / 240.0; // 240 inches is about max distance
 				cv::Point dispTarget(
 						displaySize.width * (0.5 - distance * sin(yaw) *targetScale),
 						displaySize.height* (0.9 - distance * cos(yaw) *targetScale)
@@ -341,7 +339,7 @@ int main(int argc, const char** argv)
 #ifdef XGUI_ENABLED
 		if (dispMode > 0) {
 			for(size_t i=1; i < timer_values.size(); ++i) {
-				long int val = timer_values[i] - timer_values[0];
+				long int val = timer_values[i] - timer_values[i-1];
 				std::ostringstream osst;
 				osst << timer_names[i] << ": " << val / cv::getTickFrequency();
 				cv::putText(display, osst.str(), cv::Point(20,40+20*i), 0, 0.33, cv::Scalar(0,200,200));
@@ -350,7 +348,7 @@ int main(int argc, const char** argv)
 			cv::imshow(detection_window, display);
 		}
 
-		int key = cv::waitKey(20);
+		int key = cv::waitKey(2);
 		if ((key & 255) == 27) break;
 		if ((key & 255) == 32) {
 			if(++dispMode > 2) dispMode =0;
