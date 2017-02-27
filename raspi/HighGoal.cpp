@@ -10,19 +10,23 @@
 #include "opencv2/imgproc.hpp"
 
 static const cv::Size frameSize(640,480);
-static const double cameraFPS = 8;
+static const double cameraFPS = 10;
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const double BOILER_TAPE_RATIO = 2.5;
 static const double BOILER_TAPE_RATIO2 = BOILER_TAPE_RATIO/2;
-static const char* default_intrinsic_file = "jetson-camera-720.yml";
-static const double CAMERA_GOAL_HEIGHT = 69; //!<- Tower height is 97" and the camera is 19" above the floor
-static const double CAMERA_ZERO_DIST = 130; //!<- Tower height is 97" and the camera is 12" above the floor
+static const double CAMERA_GOAL_HEIGHT = 69; //!<- Top tape height is 88" and the camera is 19" above the floor
+static const double CAMERA_ZERO_DIST = 77;
 
 static cv::Mat intrinsic, distortion;
 static std::shared_ptr<NetworkTable> table;
 static std::shared_ptr<NetworkTable> preferences;
 static const std::vector<cv::Point3d> realBoiler {{0,-4, 0}, {0, 0, 0.3}, {0, 4, 0.3}, {0, 6, 0}};
+static const std::vector<cv::Point3f> realLift {
+	{-5.125,-2.5, 10.5}, {-5.125, 2.5, 10.5}, // Left, top then bottom
+	{ 5.125,-2.5, 10.5}, { 5.125, 2.5, 10.5}  // Right, top then bottom
+};
 static const cv::Vec3d boiler_camera_offset(8.0, -14.0, 12);
+static const cv::Vec3d lift_camera_offset(-13.0, -4.0, 0.0);
 
 #ifdef XGUI_ENABLED
 	#include "opencv2/highgui.hpp"
@@ -43,6 +47,27 @@ std::string date_now()
 	    str = str.substr( 0, endpos+1 );
 	}
 	return str + " ";
+}
+
+bool readIntrinsics(const char *filename)
+{
+	cv::FileStorage fs( filename, cv::FileStorage::READ );
+	if( !fs.isOpened() )
+	{
+		std::cerr << date_now() << " Error: Couldn't open intrinsic parameters file "
+				<< filename << std::endl;
+		return false;
+	}
+	fs["camera_matrix"] >> intrinsic;
+	fs["distortion_coefficients"] >> distortion;
+	if( intrinsic.empty() || distortion.empty() )
+	{
+		std::cerr << date_now() << " Error: Couldn't load intrinsic parameters from "
+				<< filename << std::endl;
+		return false;
+	}
+	fs.release();
+	return true;
 }
 
 struct RingRelation {
@@ -88,25 +113,68 @@ void righten(cv::RotatedRect &rectangle)
 	if (rectangle.angle < -90.0) rectangle.angle += 180;
 }
 
-bool readIntrinsics(const char *filename)
+std::vector<cv::Point> FindCorners2(
+		const std::vector<cv::Point> cont_one,
+		cv::RotatedRect box,
+		double dir=1)
 {
-	cv::FileStorage fs( filename, cv::FileStorage::READ );
-	if( !fs.isOpened() )
+	std::vector<cv::Point> ret(2, cv::Point(0,0));
+	double maxLo = 0;
+	double maxHi = 0;
+	double r = dir * (box.size.height*box.size.height + box.size.width*box.size.width) / (2 * box.size.width);
+	double alpha = CV_PI * box.angle / 180.0;
+	cv::Matx22f rot(cos(alpha),-sin(alpha),sin(alpha),cos(alpha));
+	cv::Point2f refHi = rot * cv::Point2f(r,  box.size.height/2) + box.center;
+	cv::Point2f refLo = rot * cv::Point2f(r, -box.size.height/2) + box.center;
+	for (cv::Point pnt : cont_one)
 	{
-		std::cerr << date_now() << " Error: Couldn't open intrinsic parameters file "
-				<< filename << std::endl;
-		return false;
+		cv::Point2f lo = cv::Point2f(pnt) - refLo;
+		double sLo = cv::norm(lo);
+		if (sLo > maxLo) {
+			maxLo = sLo;
+			ret[1] = pnt;
+		}
+
+		cv::Point2f hi = cv::Point2f(pnt) - refHi;
+		double sHi = cv::norm(hi);
+		if (sHi > maxHi) {
+			maxHi = sHi;
+			ret[0] = pnt;
+		}
 	}
-	fs["camera_matrix"] >> intrinsic;
-	fs["distortion_coefficients"] >> distortion;
-	if( intrinsic.empty() || distortion.empty() )
-	{
-		std::cerr << date_now() << " Error: Couldn't load intrinsic parameters from "
-				<< filename << std::endl;
-		return false;
-	}
-	fs.release();
-	return true;
+	return ret;
+}
+
+float rate2rects(cv::RotatedRect one, cv::RotatedRect two)
+{
+	static const float perf_height = 5.0 / 8.25;
+	static const float perf_width  = 2.0 / 8.25;
+	float acc = fabs(sin(CV_PI*one.angle/180.0)) + fabs(sin(CV_PI*two.angle/180.0));
+	cv::Point2f bar = two.center - one.center;
+	if(bar.x == 0) return 999999;
+	acc += fabs(bar.y/bar.x);
+	float bar_len = cv::norm(bar);
+	acc += fabs(one.size.height / bar_len - perf_height);
+	acc += fabs(one.size.width  / bar_len - perf_width);
+	acc += fabs(two.size.height / bar_len - perf_height);
+	acc += fabs(two.size.width  / bar_len - perf_width);
+	acc += fabs((one.size.height - two.size.height) / bar_len);
+	return acc;
+}
+
+float rate3rects(cv::RotatedRect one, cv::RotatedRect two, cv::RotatedRect three)
+{
+	float acc = 0;
+	cv::Point2f pts[8];
+	two.points(pts);
+	three.points(pts+4);
+	std::vector<cv::Point2f> new_points;
+	new_points.reserve(8);
+	for(size_t i=0; i<8; ++i) new_points.push_back(pts[i]);
+	cv::RotatedRect other = cv::minAreaRect(new_points);
+	righten(other);
+	acc += rate2rects(one, other);
+	return acc;
 }
 
 cv::Point2d intersect(cv::Point2d pivot, cv::Matx22d rotation, cv::Point one, cv::Point two)
@@ -165,6 +233,152 @@ void FindMidPoints(std::vector<cv::Point> *upCont, std::vector<cv::Point> *dnCon
 	}
 }
 
+bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
+{
+	std::vector<cv::Point> cont_one[3];
+	cv::RotatedRect rect_one[3];
+	float biggest[3] = {0,0,0};
+	for (std::vector<cv::Point> cont : contours)
+	{
+		cv::RotatedRect rect = cv::minAreaRect(cont);
+		float area = rect.size.height * rect.size.width;
+		if (area < MIN_AREA) continue;
+		righten(rect);
+
+		if (area > biggest[0]) {
+			cont_one[2] = cont_one[1];
+			cont_one[1] = cont_one[0];
+			cont_one[0] = cont;
+			rect_one[2] = rect_one[1];
+			rect_one[1] = rect_one[0];
+			rect_one[0] = rect;
+			biggest[2] = biggest[1];
+			biggest[1] = biggest[0];
+			biggest[0] = area;
+		}
+		else if (area > biggest[1]) {
+			cont_one[2] = cont_one[1];
+			cont_one[1] = cont;
+			rect_one[2] = rect_one[1];
+			rect_one[1] = rect;
+			biggest[2] = biggest[1];
+			biggest[1] = area;
+		}
+		else if (area > biggest[2]) {
+			cont_one[2] = cont;
+			rect_one[2] = rect;
+			biggest[2] = area;
+		}
+	}
+
+	if (biggest[0] > 0 && biggest[1] > 0) {
+		cv::RotatedRect lRect, rRect;
+		std::vector<cv::Point> lCont, rCont;
+		float mscore = 999999;
+
+		if(biggest[2] > 0) {
+			for(size_t i=0; i < 3; ++i) {
+				float score = rate2rects(rect_one[i], rect_one[(i+1)%3]);
+				if(score < mscore) {
+					mscore = score;
+					lRect = rect_one[i];
+					lCont = cont_one[i];
+					rRect = rect_one[(i+1)%3];
+					rCont = cont_one[(i+1)%3];
+				}
+			}
+			for(size_t i=0; i < 3; ++i) {
+				float score = rate3rects(rect_one[i], rect_one[(i+1)%3], rect_one[(i+2)%3]);
+				if(score < mscore) {
+					mscore = score;
+					lRect = rect_one[i];
+					lCont = cont_one[i];
+					rCont = cont_one[(i+1)%3];
+					rCont.reserve(rCont.size() + cont_one[(i+2)%3].size());
+					rCont.insert(rCont.end(), cont_one[(i+2)%3].begin(), cont_one[(i+2)%3].end());
+					rRect = cv::minAreaRect(rCont);
+					righten(rRect);
+				}
+			}
+		}
+		else {
+			lRect = rect_one[0];
+			lCont = cont_one[0];
+			rRect = rect_one[1];
+			rCont = cont_one[1];
+		}
+
+		if (lRect.center.x > rRect.center.x) {
+			std::swap(lRect, rRect);
+			std::swap(lCont, rCont);
+		}
+
+		std::vector<cv::Point> lCorn = FindCorners2(lCont, lRect,  1);
+		std::vector<cv::Point> rCorn = FindCorners2(rCont, rRect, -1);
+		std::vector<cv::Point2f> imagePoints;
+		imagePoints.push_back(lCorn[0]);
+		imagePoints.push_back(lCorn[1]);
+		imagePoints.push_back(rCorn[0]);
+		imagePoints.push_back(rCorn[1]);
+
+		cv::Vec3d rvec, tvec, lvec;
+		cv::Matx33d rmat;
+
+		cv::solvePnP(
+				realLift,       // 3-d points in object coordinate
+				imagePoints,        // 2-d points in image coordinates
+				intrinsic,           // Our camera matrix
+				distortion,
+				rvec,                // Output rotation *vector*.
+				tvec                 // Output translation vector.
+		);
+		cv::Rodrigues(rvec, rmat);
+		// tvec is where the target is in the camera coordinates
+		// We offset it with the camera_offset vector and rotate opposite to the target's rotation
+		lvec = rmat.t() * -(tvec + lift_camera_offset);
+
+		table->PutNumber("Peg Crossrange", lvec[0]);
+		table->PutNumber("Peg Downrange", -lvec[2]); // Robot is in negative Z area. We expect positive down range
+		table->PutNumber("Peg Yaw", -atan2(tvec[0],tvec[2]));
+		table->PutNumber("Peg Time", cv::getTickCount() / cv::getTickFrequency());
+
+#ifdef XGUI_ENABLED
+		cv::Point dispTarget = cv::Point(
+				0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
+				0.9*displaySize.height - (displaySize.height/150)*tvec[2]
+				);
+		cv::Vec3d peg = rmat.t() * (tvec + lift_camera_offset);
+		cv::Point peg2D = displaySize.height/10 * (cv::Point2d(peg[0],peg[2]) / cv::norm(peg));
+		cv::line(display, imagePoints[0] * displayRatio, imagePoints[1] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
+		cv::line(display, imagePoints[1] * displayRatio, imagePoints[3] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
+		cv::line(display, imagePoints[3] * displayRatio, imagePoints[2] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
+		cv::line(display, imagePoints[2] * displayRatio, imagePoints[0] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
+
+		cv::circle(display, lCorn[0]*displayRatio, 8, cv::Scalar(0,125,255), 1);
+		cv::circle(display, lCorn[1]*displayRatio, 8, cv::Scalar(0,0,255), 1);
+		cv::circle(display, rCorn[0]*displayRatio, 8, cv::Scalar(125,255,0), 1);
+		cv::circle(display, rCorn[1]*displayRatio, 8, cv::Scalar(0,255,0), 1);
+
+		cv::line(display,
+				dispTarget,
+				cv::Point(displaySize.width/2,displaySize.height*0.9),
+				cv::Scalar(0,255,255));
+		cv::line(display,
+				dispTarget,
+				dispTarget - peg2D,
+				cv::Scalar(0,0,255));
+		std::ostringstream oss;
+		oss << "Yaw:  " << -180.0*atan2(tvec[0],tvec[2])/CV_PI << " (" << rvec[0] << " : " << rvec[1] << " : " << rvec[2] << ")";
+		cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
+		std::ostringstream oss1;
+		oss1 << "Down: " << lvec[2] << "  Cross: " << lvec[0];
+		cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
+#endif
+		return true;
+	}
+	return false;
+}
+
 bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 {
 	// First build a graph of relationships between contours
@@ -201,8 +415,7 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 			std::vector<cv::Point2d> undistortedPoints;
 			cv::undistortPoints(imagePoints, undistortedPoints, intrinsic, distortion, cv::noArray(), intrinsic);
 
-			double cam_tilt = preferences->GetNumber("Front Camera Tilt", 40);
-			cv::Vec3d cam_offset(-18, 0, -18);
+			double cam_tilt = preferences->GetNumber("Front Camera Tilt", 42);
 			double cam_cos = cos(CV_PI*cam_tilt/180.0);
 			double dee = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
 			distance = cam_cos * intrinsic.at<double>(1,1) * fabs(realBoiler[3].y-realBoiler[0].y) / dee;
@@ -252,11 +465,34 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 	return false;
 }
 
+enum TaskID {
+	kLift,
+	kBoiler
+};
+
 int main(int argc, const char** argv)
 {
-	const char* intrinsic_file = default_intrinsic_file;
-	if(argc > 1) intrinsic_file = argv[1];
+	if(argc != 3) {
+		std::cerr << "Format: this-program task intrinsics.yml" << std::endl
+				<< "Tasks: Peg or Boiler" << std::endl;
+	}
+	const char* task_argv = argv[1];
+	const char* intrinsic_file = argv[2];
+	static std::string taskSysTime;
+	static TaskID task;
 
+	if(std::strcmp(task_argv, "Peg") == 0) {
+		taskSysTime = "Peg Sys Time";
+		task = kLift;
+	}
+	else
+	if(std::strcmp(task_argv, "Boiler") == 0) {
+		taskSysTime = "Boiler Sys Time";
+		task = kBoiler;
+	}
+	else {
+		std::cerr << "The task can only be either Peg or Boiler" << std::endl;
+	}
 	if(!readIntrinsics(intrinsic_file)) return -1;
 
 	NetworkTable::SetClientMode();
@@ -307,7 +543,7 @@ int main(int argc, const char** argv)
 	for(;;) {
 		// System timer always runs so we can see the coprocessor is online
 		// and can compare the last measurement time against the current time.
-		table->PutNumber("Boiler Sys Time", cv::getTickCount()/cv::getTickFrequency());
+		table->PutNumber(taskSysTime, cv::getTickCount()/cv::getTickFrequency());
 
 		capture >> frame;
 		if (frame.empty()) {
@@ -342,7 +578,14 @@ int main(int argc, const char** argv)
 		cv::findContours(filtered, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
 		timer_names.push_back("contours found"); timer_values.push_back(cv::getTickCount());
 
-		ProcessHighGoal(contours);
+		switch (task) {
+		case kBoiler:
+			ProcessHighGoal(contours);
+			break;
+		case kLift:
+			ProcessGearLift(contours);
+			break;
+		}
 
 #ifdef XGUI_ENABLED
 		timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
