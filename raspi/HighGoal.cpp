@@ -26,7 +26,7 @@ static const std::vector<cv::Point3f> realLift {
 	{ 5.125,-2.5, 10.5}, { 5.125, 2.5, 10.5}  // Right, top then bottom
 };
 static const cv::Vec3d boiler_camera_offset(8.0, 0.0, 12);
-static const cv::Vec3d lift_camera_offset(-13.0, -4.0, 0.0);
+static const cv::Vec3d lift_camera_offset(-13.0, -1.0, 0.0);
 
 #ifdef XGUI_ENABLED
 	#include "opencv2/highgui.hpp"
@@ -321,6 +321,9 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 		imagePoints.push_back(rCorn[0]);
 		imagePoints.push_back(rCorn[1]);
 
+		static const cv::Vec3d lift_camera_turn(0,
+				-(preferences->GetNumber("Peg Camera Bias", 25) * (CV_PI/180.0)),
+				0);
 		cv::Vec3d rvec, tvec, lvec;
 		cv::Matx33d rmat;
 
@@ -332,14 +335,16 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 				rvec,                // Output rotation *vector*.
 				tvec                 // Output translation vector.
 		);
+		rvec += lift_camera_turn;
 		cv::Rodrigues(rvec, rmat);
 		// tvec is where the target is in the camera coordinates
 		// We offset it with the camera_offset vector and rotate opposite to the target's rotation
 		lvec = rmat.t() * -(tvec + lift_camera_offset);
+		double yaw = -atan2(tvec[0],tvec[2]) + lift_camera_turn[1];
 
 		table->PutNumber("Peg Crossrange", lvec[0]);
 		table->PutNumber("Peg Downrange", -lvec[2]); // Robot is in negative Z area. We expect positive down range
-		table->PutNumber("Peg Yaw", -atan2(tvec[0],tvec[2]));
+		table->PutNumber("Peg Yaw", yaw);
 		table->PutNumber("Peg Time", cv::getTickCount() / cv::getTickFrequency());
 
 #ifdef XGUI_ENABLED
@@ -368,7 +373,7 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 				dispTarget - peg2D,
 				cv::Scalar(0,0,255));
 		std::ostringstream oss;
-		oss << "Yaw:  " << -180.0*atan2(tvec[0],tvec[2])/CV_PI << " (" << rvec[0] << " : " << rvec[1] << " : " << rvec[2] << ")";
+		oss << "Yaw:  " << 180.0*yaw/CV_PI << " (" << rvec[0] << " : " << rvec[1] << " : " << rvec[2] << ")";
 		cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
 		std::ostringstream oss1;
 		oss1 << "Down: " << lvec[2] << "  Cross: " << lvec[0];
