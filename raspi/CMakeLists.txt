@@ -24,3 +24,6 @@ target_link_libraries(highgoal ${OpenCV_LIBS} ntcore ${CMAKE_THREAD_LIBS_INIT})
 add_executable(test_video test_video.cpp)
 target_link_libraries(test_video ${OpenCV_LIBS} ${CMAKE_THREAD_LIBS_INIT})
 
+add_executable(takepics takepics.cpp)
+target_link_libraries(takepics ${OpenCV_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+
