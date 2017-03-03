@@ -1,4 +1,4 @@
-#define XGUI_ENABLED
+//#define XGUI_ENABLED
 
 #include <iostream>
 #include <memory>
@@ -515,7 +515,7 @@ int main(int argc, const char** argv)
 	preferences = NetworkTable::GetTable("/Preferences");
 
 	cv::Mat frame, hsv, filtered, buffer1;
-	static cv::Vec3i BlobLower(66, 200,  30);
+	static cv::Vec3i BlobLower(50,  80,  50);
 	static cv::Vec3i BlobUpper(94, 255, 255);
 	static int dispMode = 2; // 0: none, 1: bw, 2: color
 
