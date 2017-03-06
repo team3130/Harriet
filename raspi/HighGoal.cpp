@@ -1,4 +1,5 @@
 //#define XGUI_ENABLED
+#define NETWORKTABLES_ENABLED
 
 #include <iostream>
 #include <memory>
@@ -18,8 +19,16 @@ static const double CAMERA_GOAL_HEIGHT = 69; //!<- Top tape height is 88" and th
 static const double CAMERA_ZERO_DIST = 77;
 
 static cv::Mat intrinsic, distortion;
-static std::shared_ptr<NetworkTable> table;
-static std::shared_ptr<NetworkTable> preferences;
+
+#ifdef NETWORKTABLES_ENABLED
+	static std::shared_ptr<NetworkTable> table;
+	static std::shared_ptr<NetworkTable> preferences;
+#else
+	struct PREFS {
+		static double GetNumber(std::string name, double deflt) {return deflt;};
+	} *preferences;
+#endif
+
 static const std::vector<cv::Point3d> realBoiler {{0,-4, 0}, {0, 0, 0.3}, {0, 4, 0.3}, {0, 6, 0}};
 static const std::vector<cv::Point3f> realLift {
 	{-5.125,-2.5, 10.5}, {-5.125, 2.5, 10.5}, // Left, top then bottom
@@ -322,9 +331,9 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 		imagePoints.push_back(rCorn[1]);
 
 		static const cv::Vec3d lift_camera_turn(0,
-				-(preferences->GetNumber("Peg Camera Bias", 25) * (CV_PI/180.0)),
+				(preferences->GetNumber("Peg Camera Bias", 25) * (CV_PI/180.0)),
 				0);
-		cv::Vec3d rvec, tvec, lvec;
+		cv::Vec3d rvec, tvec, robot_loc, target_loc;
 		cv::Matx33d rmat;
 
 		cv::solvePnP(
@@ -335,25 +344,23 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 				rvec,                // Output rotation *vector*.
 				tvec                 // Output translation vector.
 		);
-		rvec += lift_camera_turn;
-		cv::Rodrigues(rvec, rmat);
+		cv::Rodrigues(rvec + lift_camera_turn, rmat);
 		// tvec is where the target is in the camera coordinates
 		// We offset it with the camera_offset vector and rotate opposite to the target's rotation
-		lvec = rmat.t() * -(tvec + lift_camera_offset);
-		double yaw = -atan2(tvec[0],tvec[2]) + lift_camera_turn[1];
+		target_loc = tvec + lift_camera_offset;
+		robot_loc = rmat.t() * -(target_loc);
+		// Yaw of the robot is positive if the target is to the left less camera own turn
+		double yaw = -atan2(target_loc[0],target_loc[2]) - lift_camera_turn[1];
 
-		table->PutNumber("Peg Crossrange", lvec[0]);
-		table->PutNumber("Peg Downrange", -lvec[2]); // Robot is in negative Z area. We expect positive down range
+#ifdef NETWORKTABLES_ENABLED
+		table->PutNumber("Peg Distance", cv::norm(target_loc));
+		table->PutNumber("Peg Crossrange", robot_loc[0]);
+		table->PutNumber("Peg Downrange", -robot_loc[2]); // Robot is in negative Z area. We expect positive down range
 		table->PutNumber("Peg Yaw", yaw);
 		table->PutNumber("Peg Time", cv::getTickCount() / cv::getTickFrequency());
+#endif
 
 #ifdef XGUI_ENABLED
-		cv::Point dispTarget = cv::Point(
-				0.5*displaySize.width  + (displaySize.height/150)*tvec[0],
-				0.9*displaySize.height - (displaySize.height/150)*tvec[2]
-				);
-		cv::Vec3d peg = rmat.t() * (tvec + lift_camera_offset);
-		cv::Point peg2D = displaySize.height/10 * (cv::Point2d(peg[0],peg[2]) / cv::norm(peg));
 		cv::line(display, imagePoints[0] * displayRatio, imagePoints[1] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
 		cv::line(display, imagePoints[1] * displayRatio, imagePoints[3] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
 		cv::line(display, imagePoints[3] * displayRatio, imagePoints[2] * displayRatio, cv::Scalar(200, 0, 255), 1, cv::LINE_AA);
@@ -364,19 +371,36 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 		cv::circle(display, rCorn[0]*displayRatio, 8, cv::Scalar(125,255,0), 1);
 		cv::circle(display, rCorn[1]*displayRatio, 8, cv::Scalar(0,255,0), 1);
 
+		cv::Point dispTarget = cv::Point(
+				0.5*displaySize.width  + (displaySize.height/150)*(target_loc[0]),
+				0.9*displaySize.height - (displaySize.height/150)*(target_loc[2])
+				);
 		cv::line(display,
 				dispTarget,
 				cv::Point(displaySize.width/2,displaySize.height*0.9),
 				cv::Scalar(0,255,255));
+
+		cv::Point dispRobot = cv::Point(
+				0.5*displaySize.width  - (displaySize.height/150)*(lift_camera_offset[0]),
+				0.9*displaySize.height + (displaySize.height/150)*(lift_camera_offset[2])
+				);
 		cv::line(display,
 				dispTarget,
-				dispTarget - peg2D,
+				dispRobot,
+				cv::Scalar(0,255,255));
+
+		cv::Vec3d peg = robot_loc / cv::norm(robot_loc);
+		cv::Point peg2D = displaySize.height/10 * cv::Point2d(peg[0],peg[2]);
+		cv::line(display,
+				dispTarget,
+				dispTarget + peg2D,
 				cv::Scalar(0,0,255));
+
 		std::ostringstream oss;
-		oss << "Yaw:  " << 180.0*yaw/CV_PI << " (" << rvec[0] << " : " << rvec[1] << " : " << rvec[2] << ")";
+		oss << "Yaw: " << 180.0*yaw/CV_PI << " (" << rvec[0] << " " << rvec[1] << " " << rvec[2] << ")";
 		cv::putText(display, oss.str(), cv::Point(20,20), 0, 0.33, cv::Scalar(0,200,200));
 		std::ostringstream oss1;
-		oss1 << "Down: " << lvec[2] << "  Cross: " << lvec[0];
+		oss1 << "Down: " << -robot_loc[2] << "  Cross: " << robot_loc[0];
 		cv::putText(display, oss1.str(), cv::Point(20,40), 0, 0.33, cv::Scalar(0,200,200));
 #endif
 		return true;
@@ -444,10 +468,12 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 				cv::Vec3d D(downrange*sin(yaw), 0, downrange*cos(yaw));
 				cv::Vec3d A = boiler_camera_offset + D;
 				yaw = atan2(A[0], A[2]);
+#ifdef NETWORKTABLES_ENABLED
 				table->PutNumber("Boiler Downrange", cv::norm(A));
 				table->PutNumber("Boiler Distance", distance);
 				table->PutNumber("Boiler Yaw", yaw);
 				table->PutNumber("Boiler Time", cv::getTickCount()/cv::getTickFrequency());
+#endif
 			}
 
 #ifdef XGUI_ENABLED
@@ -509,10 +535,14 @@ int main(int argc, const char** argv)
 	}
 	if(!readIntrinsics(intrinsic_file)) return -1;
 
+#ifdef NETWORKTABLES_ENABLED
 	NetworkTable::SetClientMode();
 	NetworkTable::SetTeam(3130);
 	table = NetworkTable::GetTable("/Jetson");
 	preferences = NetworkTable::GetTable("/Preferences");
+#else
+	preferences = NULL;
+#endif
 
 	cv::Mat frame, hsv, filtered, buffer1;
 	static cv::Vec3i BlobLower(50,  80,  50);
@@ -555,9 +585,11 @@ int main(int argc, const char** argv)
 	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(4,4));
 
 	for(;;) {
+#ifdef NETWORKTABLES_ENABLED
 		// System timer always runs so we can see the coprocessor is online
 		// and can compare the last measurement time against the current time.
 		table->PutNumber(taskSysTime, cv::getTickCount()/cv::getTickFrequency());
+#endif
 
 		capture >> frame;
 		if (frame.empty()) {
