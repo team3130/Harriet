@@ -445,31 +445,34 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 			cv::undistortPoints(imagePoints, undistortedPoints, intrinsic, distortion, cv::noArray(), intrinsic);
 
 			double cam_bias = preferences->GetNumber("Boiler Camera Bias", 0) * (CV_PI/180.0);
-			double m_zenith = intrinsic.at<double>(0,0) * preferences->GetNumber("Boiler Camera ZeroDist", CAMERA_ZERO_DIST) / CAMERA_GOAL_HEIGHT;
-			double m_horizon = intrinsic.at<double>(0,0) * CAMERA_GOAL_HEIGHT / preferences->GetNumber("Boiler Camera ZeroDist", CAMERA_ZERO_DIST);
-			double m_flat = sqrt(intrinsic.at<double>(0,0)*intrinsic.at<double>(0,0) + m_horizon*m_horizon);
-			double cam_tilt = atan2(CAMERA_GOAL_HEIGHT, preferences->GetNumber("Boiler Camera ZeroDist", CAMERA_ZERO_DIST));
+			double tangent = CAMERA_GOAL_HEIGHT / preferences->GetNumber("Boiler Camera ZeroDist", CAMERA_ZERO_DIST);
+			double focal = intrinsic.at<double>(1,1);
+			double zenith = focal / tangent;
+			double horizon = focal * tangent;
+			double flat = sqrt(focal*focal + horizon*horizon);
+			double cosine = focal / flat;
 
-			double dee = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
-			distance = cos(cam_tilt) * intrinsic.at<double>(1,1) * fabs(realBoiler[3].y-realBoiler[0].y) / dee;
+			double pixels = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
+			double inches = fabs(realBoiler[3].y-realBoiler[0].y);
+			distance = cosine * focal * inches / pixels;
 
 			// dX is the offset of the target from the focal center to the right
-			float dX = undistortedPoints[0].x - intrinsic.at<double>(0,2);
+			double dX = undistortedPoints[0].x - intrinsic.at<double>(0,2);
 			// dY is the distance from the zenith to the target on the image
-			float dY = m_zenith + undistortedPoints[0].y - intrinsic.at<double>(1,2);
+			double dY = zenith + undistortedPoints[0].y - intrinsic.at<double>(1,2);
 			// The real azimuth to the target is on the horizon, so scale it accordingly
-			float azimuth = dX * ((m_zenith + m_horizon) / dY);
+			double azimuth = dX * ((zenith + horizon) / dY);
 			// Vehicle's yaw is negative arc tangent from the current heading to the target
-			yaw = -atan2(azimuth, m_flat) + cam_bias;
+			yaw = -atan2(azimuth, flat) + cam_bias;
 
 			// Do further adjustments only if distance makes sense
 			if(distance > CAMERA_GOAL_HEIGHT) {
-				double downrange = sqrt(distance*distance - CAMERA_GOAL_HEIGHT*CAMERA_GOAL_HEIGHT);
-				cv::Vec3d D(downrange*sin(yaw), 0, downrange*cos(yaw));
+				double level_dist = sqrt(distance*distance - CAMERA_GOAL_HEIGHT*CAMERA_GOAL_HEIGHT);
+				cv::Vec3d D(-level_dist*sin(yaw), 0, level_dist*cos(yaw));
 				cv::Vec3d A = boiler_camera_offset + D;
-				yaw = atan2(A[0], A[2]);
+				yaw = -atan2(A[0], A[2]);
 #ifdef NETWORKTABLES_ENABLED
-				table->PutNumber("Boiler Downrange", cv::norm(A));
+				table->PutNumber("Boiler Groundrange", cv::norm(A));
 				table->PutNumber("Boiler Distance", distance);
 				table->PutNumber("Boiler Yaw", yaw);
 				table->PutNumber("Boiler Time", cv::getTickCount()/cv::getTickFrequency());
