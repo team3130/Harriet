@@ -451,9 +451,12 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 			double horizon = focal * tangent;
 			double flat = sqrt(focal*focal + horizon*horizon);
 			double cosine = focal / flat;
+			cv::Point2d Zen = cv::Point2d(intrinsic.at<double>(0,2), intrinsic.at<double>(1,2)-zenith);
 
 			double pixels = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
 			double inches = fabs(realBoiler[3].y-realBoiler[0].y);
+
+			// TODO Review: This distance is wrong. Cosine does not always equal to cos(cam_tilt)
 			distance = cosine * focal * inches / pixels;
 
 			// dX is the offset of the target from the focal center to the right
@@ -472,6 +475,7 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 				cv::Vec3d A = boiler_camera_offset + D;
 				yaw = -atan2(A[0], A[2]);
 #ifdef NETWORKTABLES_ENABLED
+				table->PutNumber("Boiler Zero", zenith - cv::norm(Zen - undistortedPoints[0]));
 				table->PutNumber("Boiler Groundrange", cv::norm(A));
 				table->PutNumber("Boiler Distance", distance);
 				table->PutNumber("Boiler Yaw", yaw);
