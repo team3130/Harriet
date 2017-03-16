@@ -450,14 +450,10 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 			double zenith = focal / tangent;
 			double horizon = focal * tangent;
 			double flat = sqrt(focal*focal + horizon*horizon);
-			double cosine = focal / flat;
 			cv::Point2d Zen = cv::Point2d(intrinsic.at<double>(0,2), intrinsic.at<double>(1,2)-zenith);
 
-			double pixels = cv::norm(undistortedPoints[0] - undistortedPoints[3]);
-			double inches = fabs(realBoiler[3].y-realBoiler[0].y);
-
-			// TODO Review: This distance is wrong. Cosine does not always equal to cos(cam_tilt)
-			distance = cosine * focal * inches / pixels;
+			double pixels = cv::norm(undistortedPoints[3] - undistortedPoints[0]);
+			double inches = fabs(realBoiler[3].y - realBoiler[0].y);
 
 			// dX is the offset of the target from the focal center to the right
 			double dX = undistortedPoints[0].x - intrinsic.at<double>(0,2);
@@ -467,6 +463,16 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 			double azimuth = dX * ((zenith + horizon) / dY);
 			// Vehicle's yaw is negative arc tangent from the current heading to the target
 			yaw = -atan2(azimuth, flat) + cam_bias;
+
+			// TODO This is again an approximation of the distance between the camera and the target
+			// TODO It's an OK approximation for OK aimed targets but won't work if the target is off
+			cv::Point2d q(dX, undistortedPoints[0].y - intrinsic.at<double>(1,2));
+			double q_len = cv::norm(q);
+			double alpha = atan(tangent);
+			double theta = atan2(q_len, focal);
+			double height = pixels * sin(CV_PI/2 - theta) / sin(CV_PI/2 + theta - alpha);
+			double a = pixels * sin(alpha) / sin(CV_PI/2 + theta - alpha);
+			distance = (sqrt(focal*focal + q_len*q_len) + a) * inches / height;
 
 			// Do further adjustments only if distance makes sense
 			if(distance > CAMERA_GOAL_HEIGHT) {
