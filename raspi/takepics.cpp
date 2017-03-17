@@ -29,6 +29,7 @@ std::string date_now()
 
 int main(int argc, const char** argv)
 {
+	bool autoexp = false;
 	static int n_file = 1;
 	cv::Mat frame, hsv, filtered, buffer1;
 	static cv::Vec3i BlobLower(50,  80,  50);
@@ -37,18 +38,29 @@ int main(int argc, const char** argv)
 	bool is_capture = false;
 	cv::VideoCapture capture;
 
-	if(argc > 1) {
+	if(argc == 2 and std::strcmp(argv[1], "auto") == 0) autoexp = true;
+	if(!autoexp and argc > 1) {
 		is_capture = false;
 	}
 	else {
 		is_capture = true;
+		std::cerr << "Option 'auto' for auto exposure" << std::endl << std::endl;
+		std::cerr << " ESC\tQuit" << std::endl;
+		std::cerr << " w\tSave picture in a sequential file" << std::endl;
+		std::cerr << " s\tPause, freeze the frame" << std::endl;
+		std::cerr << " Space\tChange display mode" << std::endl << std::endl;
 		for(;;) {
 			capture.open(0);
 			capture.set(cv::CAP_PROP_FRAME_WIDTH, frameSize.width);
 			capture.set(cv::CAP_PROP_FRAME_HEIGHT, frameSize.height);
 			capture.set(cv::CAP_PROP_FPS, cameraFPS);
-			capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
-			capture.set(cv::CAP_PROP_EXPOSURE, 0.001);
+			if(autoexp) {
+				capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.0); // Magic! 0.25 means manual exposure, 0.75 = auto
+			}
+			else {
+				capture.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25); // Magic! 0.25 means manual exposure, 0.75 = auto
+				capture.set(cv::CAP_PROP_EXPOSURE, 0.001);
+			}
 			capture.set(cv::CAP_PROP_BRIGHTNESS, 0.5);
 			capture.set(cv::CAP_PROP_CONTRAST, 0.5);
 			capture.set(cv::CAP_PROP_SATURATION, 0.5);
