@@ -31,8 +31,8 @@ static cv::Mat intrinsic, distortion;
 
 static const std::vector<cv::Point3d> realBoiler {{0,-4, 0}, {0, 0, 0.3}, {0, 4, 0.3}, {0, 6, 0}};
 static const std::vector<cv::Point3f> realLift {
-	{-5.125,-2.5, 10.5}, {-5.125, 2.5, 10.5}, // Left, top then bottom
-	{ 5.125,-2.5, 10.5}, { 5.125, 2.5, 10.5}  // Right, top then bottom
+	{-5.125,-2.5, 0}, {-5.125, 2.5, 0}, // Left, top then bottom
+	{ 5.125,-2.5, 0}, { 5.125, 2.5, 0}  // Right, top then bottom
 };
 static const cv::Vec3d boiler_camera_offset(8.0, 0.0, 12);
 static const cv::Vec3d lift_camera_offset(-13.0, -1.0, 0.0);
@@ -346,16 +346,19 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 		cv::Rodrigues(rvec, rmat);
 		// tvec is where the target is in the camera coordinates
 		// We offset it with the camera_offset vector and rotate opposite to the target's rotation
-		target_loc = crmat * (tvec + (crmat.t() * lift_camera_offset));
+		target_loc = crmat * (1.26*tvec + (crmat.t() * lift_camera_offset));
 		robot_loc = rmat.t() * -(target_loc);
 		// Yaw of the robot is positive if the target is to the left less camera own turn
-		double yaw = -atan2(target_loc[0],target_loc[2]);
+		double yaw = 0.78 * -atan2(target_loc[0],target_loc[2]);
 
 #ifdef NETWORKTABLES_ENABLED
 		table->PutNumber("Peg Distance", cv::norm(target_loc));
 		table->PutNumber("Peg Crossrange", robot_loc[0]);
 		table->PutNumber("Peg Downrange", -robot_loc[2]); // Robot is in negative Z area. We expect positive down range
 		table->PutNumber("Peg Yaw", yaw);
+		table->PutNumber("Peg X", tvec[0]);
+		table->PutNumber("Peg Y", tvec[1]);
+		table->PutNumber("Peg Z", tvec[2]);
 		table->PutNumber("Peg Time", cv::getTickCount() / cv::getTickFrequency());
 #endif
 
@@ -649,12 +652,12 @@ int main(int argc, const char** argv)
 			break;
 		}
 		timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
-		total_time += (cv::getTickCount() - timer_values[1]) / cv::getTickFrequency();
+		total_time += (timer_values[timer_values.size()-1] - timer_values[1]) / cv::getTickFrequency();
 
 		if(++n > cameraFPS * 120) {
 			std::cerr << date_now() << std::endl;
 			std::cerr << " Time per frame = " << total_time / n << " at freq: " << cv::getTickFrequency() << std::endl;
-			std::cerr << " Last frame: " << (timer_values[timer_values.size()-1] - timer_values[0]) / cv::getTickFrequency() << std::endl;
+			std::cerr << " Last frame: " << (timer_values[timer_values.size()-1] - timer_values[1]) / cv::getTickFrequency() << std::endl;
 			std::cerr << " Prefs: Peg Camera Bias = " << preferences->GetNumber("Peg Camera Bias", 9999) << std::endl;
 			std::cerr << " Prefs: Boiler Camera Bias = " << preferences->GetNumber("Boiler Camera Bias", 9999) << std::endl;
 			std::cerr << " Prefs: Boiler Camera ZeroDist = " << preferences->GetNumber("Boiler Camera ZeroDist", 9999) << std::endl;
