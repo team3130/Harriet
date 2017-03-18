@@ -330,11 +330,10 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 		imagePoints.push_back(rCorn[0]);
 		imagePoints.push_back(rCorn[1]);
 
-		static const cv::Vec3d lift_camera_turn(0,
-				(preferences->GetNumber("Peg Camera Bias", 25) * (CV_PI/180.0)),
-				0);
+		cv::Vec3d lift_camera_turn(0, (preferences->GetNumber("Peg Camera Bias", 27) * (CV_PI/180.0)), 0);
 		cv::Vec3d rvec, tvec, robot_loc, target_loc;
-		cv::Matx33d rmat;
+		cv::Matx33d rmat, crmat;
+		cv::Rodrigues(lift_camera_turn, crmat);
 
 		cv::solvePnP(
 				realLift,       // 3-d points in object coordinate
@@ -347,7 +346,7 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 		cv::Rodrigues(rvec + lift_camera_turn, rmat);
 		// tvec is where the target is in the camera coordinates
 		// We offset it with the camera_offset vector and rotate opposite to the target's rotation
-		target_loc = tvec + lift_camera_offset;
+		target_loc = crmat * (tvec + (crmat.t() * lift_camera_offset));
 		robot_loc = rmat.t() * -(target_loc);
 		// Yaw of the robot is positive if the target is to the left less camera own turn
 		double yaw = -atan2(target_loc[0],target_loc[2]) - lift_camera_turn[1];
@@ -597,6 +596,8 @@ int main(int argc, const char** argv)
 	// Initialize an element (reusable) for morphology filters
 	cv::Mat element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(4,4));
 
+	long int n = 0;
+	double total_time = 0;
 	for(;;) {
 #ifdef NETWORKTABLES_ENABLED
 		// System timer always runs so we can see the coprocessor is online
@@ -604,15 +605,17 @@ int main(int argc, const char** argv)
 		table->PutNumber(taskSysTime, cv::getTickCount()/cv::getTickFrequency());
 #endif
 
+		std::vector<long int> timer_values;
+		std::vector<std::string> timer_names;
+		timer_names.push_back("start"); timer_values.push_back(cv::getTickCount());
+
 		capture >> frame;
 		if (frame.empty()) {
 			std::cerr << " Error reading from camera, empty frame." << std::endl;
 			std::this_thread::sleep_for(std::chrono::seconds(2));
 			continue;
 		}
-		std::vector<long int> timer_values;
-		std::vector<std::string> timer_names;
-		timer_names.push_back("start"); timer_values.push_back(cv::getTickCount());
+		timer_names.push_back("frame taken"); timer_values.push_back(cv::getTickCount());
 
 		cv::cvtColor(frame, hsv, CV_BGR2HSV);
 		inRange(hsv, BlobLower, BlobUpper, filtered);
@@ -645,9 +648,20 @@ int main(int argc, const char** argv)
 			ProcessGearLift(contours);
 			break;
 		}
+		timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
+		total_time += (cv::getTickCount() - timer_values[1]) / cv::getTickFrequency();
+
+		if(++n > cameraFPS * 120) {
+			std::cerr << date_now() << std::endl;
+			std::cerr << " Time per frame = " << total_time / n << " at freq: " << cv::getTickFrequency() << std::endl;
+			std::cerr << " Prefs: Peg Camera Bias = " << preferences->GetNumber("Peg Camera Bias", 9999) << std::endl;
+			std::cerr << " Prefs: Boiler Camera Bias = " << preferences->GetNumber("Boiler Camera Bias", 9999) << std::endl;
+			std::cerr << " Prefs: Boiler Camera ZeroDist = " << preferences->GetNumber("Boiler Camera ZeroDist", 9999) << std::endl;
+			total_time = 0;
+			n = 0;
+		}
 
 #ifdef XGUI_ENABLED
-		timer_names.push_back("calcs done"); timer_values.push_back(cv::getTickCount());
 		if (dispMode > 0) {
 			for(size_t i = 0; i < timer_values.size(); ++i) {
 				long int val;
