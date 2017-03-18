@@ -343,13 +343,13 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 				rvec,                // Output rotation *vector*.
 				tvec                 // Output translation vector.
 		);
-		cv::Rodrigues(rvec + lift_camera_turn, rmat);
+		cv::Rodrigues(rvec, rmat);
 		// tvec is where the target is in the camera coordinates
 		// We offset it with the camera_offset vector and rotate opposite to the target's rotation
 		target_loc = crmat * (tvec + (crmat.t() * lift_camera_offset));
 		robot_loc = rmat.t() * -(target_loc);
 		// Yaw of the robot is positive if the target is to the left less camera own turn
-		double yaw = -atan2(target_loc[0],target_loc[2]) - lift_camera_turn[1];
+		double yaw = -atan2(target_loc[0],target_loc[2]);
 
 #ifdef NETWORKTABLES_ENABLED
 		table->PutNumber("Peg Distance", cv::norm(target_loc));
@@ -654,6 +654,7 @@ int main(int argc, const char** argv)
 		if(++n > cameraFPS * 120) {
 			std::cerr << date_now() << std::endl;
 			std::cerr << " Time per frame = " << total_time / n << " at freq: " << cv::getTickFrequency() << std::endl;
+			std::cerr << " Last frame: " << (timer_values[timer_values.size()-1] - timer_values[0]) / cv::getTickFrequency() << std::endl;
 			std::cerr << " Prefs: Peg Camera Bias = " << preferences->GetNumber("Peg Camera Bias", 9999) << std::endl;
 			std::cerr << " Prefs: Boiler Camera Bias = " << preferences->GetNumber("Boiler Camera Bias", 9999) << std::endl;
 			std::cerr << " Prefs: Boiler Camera ZeroDist = " << preferences->GetNumber("Boiler Camera ZeroDist", 9999) << std::endl;
