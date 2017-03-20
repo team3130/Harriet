@@ -35,7 +35,7 @@ static const std::vector<cv::Point3f> realLift {
 	{ 5.125,-2.5, 0}, { 5.125, 2.5, 0}  // Right, top then bottom
 };
 static const cv::Vec3d boiler_camera_offset(8.0, 0.0, 12);
-static const cv::Vec3d lift_camera_offset(-13.0, -1.0, 0.0);
+static const cv::Vec3d lift_camera_offset(-7.875, -8.75, -1.25);
 
 #ifdef XGUI_ENABLED
 	#include "opencv2/highgui.hpp"
@@ -330,7 +330,7 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 		imagePoints.push_back(rCorn[0]);
 		imagePoints.push_back(rCorn[1]);
 
-		cv::Vec3d lift_camera_turn(0, (preferences->GetNumber("Peg Camera Bias", 27) * (CV_PI/180.0)), 0);
+		cv::Vec3d lift_camera_turn((preferences->GetNumber("Peg Camera Bias", 27) * (CV_PI/180.0)), 0, 0);
 		cv::Vec3d rvec, tvec, robot_loc, target_loc;
 		cv::Matx33d rmat, crmat;
 		cv::Rodrigues(lift_camera_turn, crmat);
