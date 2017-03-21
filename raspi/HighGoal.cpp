@@ -11,7 +11,7 @@
 #include "opencv2/imgproc.hpp"
 
 static const cv::Size frameSize(640,480);
-static const double cameraFPS = 10;
+static const double cameraFPS = 8;
 static const double MIN_AREA = 0.0002 * frameSize.height * frameSize.width;
 static const double BOILER_TAPE_RATIO = 2.5;
 static const double BOILER_TAPE_RATIO2 = BOILER_TAPE_RATIO/2;
@@ -330,7 +330,7 @@ bool ProcessGearLift(std::vector<std::vector<cv::Point>> &contours)
 		imagePoints.push_back(rCorn[0]);
 		imagePoints.push_back(rCorn[1]);
 
-		cv::Vec3d lift_camera_turn((preferences->GetNumber("Peg Camera Bias", 27) * (CV_PI/180.0)), 0, 0);
+		cv::Vec3d lift_camera_turn((-preferences->GetNumber("Peg Camera Bias", 27) * (CV_PI/180.0)), 0, 0);
 		cv::Vec3d rvec, tvec, robot_loc, target_loc;
 		cv::Matx33d rmat, crmat;
 		cv::Rodrigues(lift_camera_turn, crmat);
