@@ -35,7 +35,7 @@ static const std::vector<cv::Point3f> realLift {
 	{ 5.125,-2.5, 0}, { 5.125, 2.5, 0}  // Right, top then bottom
 };
 static const cv::Vec3d boiler_camera_offset(8.0, 0.0, 12);
-static const cv::Vec3d lift_camera_offset(-7.875, -8.75, -1.25);
+static const cv::Vec3d lift_camera_offset(-6.175, -8, -2.25);
 
 #ifdef XGUI_ENABLED
 	#include "opencv2/highgui.hpp"
