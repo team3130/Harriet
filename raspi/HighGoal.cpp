@@ -468,8 +468,8 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 
 			// TODO This is again an approximation of the distance between the camera and the target
 			// TODO It's an OK approximation for OK aimed targets but won't work if the target is off
-			cv::Point2d q(dX, undistortedPoints[0].y - intrinsic.at<double>(1,2));
-			double q_len = cv::norm(q);
+			//cv::Point2d q(dX, undistortedPoints[0].y - intrinsic.at<double>(1,2));
+			double q_len = sqrt(dX*dX + dY*dY)-zenith;
 			double alpha = atan(tangent);
 			double theta = atan2(q_len, focal);
 			double height = pixels * sin(CV_PI/2 - theta) / sin(CV_PI/2 + theta - alpha);
@@ -484,7 +484,7 @@ bool ProcessHighGoal(std::vector<std::vector<cv::Point>> &contours)
 				yaw = -atan2(A[0], A[2]);
 #ifdef NETWORKTABLES_ENABLED
 				table->PutNumber("Boiler Zero", zenith - cv::norm(Zen - undistortedPoints[0]));
-				table->PutNumber("Boiler Groundrange", cv::norm(A));
+				table->PutNumber("Boiler Groundrange", (1/.8442)*cv::norm(A)-35);
 				table->PutNumber("Boiler Distance", distance);
 				table->PutNumber("Boiler Yaw", yaw);
 				table->PutNumber("Boiler Time", cv::getTickCount()/cv::getTickFrequency());
